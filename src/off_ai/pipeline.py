@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import textwrap
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .data_adapter import OFFDataAdapter, Product
 from .insight_engine import InsightEngine, ProductInsight
@@ -39,6 +39,7 @@ class PipelineResult:
     insights: List[ProductInsight] = field(default_factory=list)
     recommendations: List[Recommendation] = field(default_factory=list)
     reference_product: Optional[Product] = None
+    relaxation_log: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -74,6 +75,16 @@ class PipelineResult:
                 lines.append(f"  NOVA group: {self.reference_product.nova_group}")
             lines.append("")
 
+        # --- Constraint relaxation ---
+        if self.relaxation_log:
+            lines.append("=" * 60)
+            lines.append("CONSTRAINT RELAXATION")
+            lines.append("=" * 60)
+            lines.append("No products found with strict filters. Relaxing constraints:")
+            for log_entry in self.relaxation_log:
+                lines.append(f"  ✓ {log_entry}")
+            lines.append("")
+
         # --- Recommendations ---
         if self.recommendations:
             lines.append("=" * 60)
@@ -90,6 +101,13 @@ class PipelineResult:
             for insight in self.insights[:5]:
                 lines.append(str(insight))
                 lines.append("-" * 40)
+        else:
+            lines.append("=" * 60)
+            lines.append("NO PRODUCTS FOUND")
+            lines.append("=" * 60)
+            lines.append("No products matched all current filters.")
+            lines.append("Try relaxing one constraint (e.g. calories/protein/fat) or broadening category terms.")
+            lines.append("Results can also be limited by country filter and missing nutrient data in OFF.")
 
         return "\n".join(lines)
 
@@ -159,11 +177,77 @@ class FoodIntelligencePipeline:
     # Internal flow
     # ------------------------------------------------------------------
 
+    def _find_relaxable_constraint(self, query: FoodQuery) -> Optional[Tuple[int, 'NutrientConstraint']]:
+        """Find the next constraint to relax (by importance order).
+        
+        Returns (index, constraint) for the least important constraint,
+        or None if all constraints have been explored or none are relaxable.
+        
+        Importance order (least to most important):
+        1. Calorie constraints (most flexible for user)
+        2. Fat/carbs/sugar constraints
+        3. Protein constraints (often functional requirement)
+        4. NOVA group constraints
+        (Never relax: excluded_ingredients, dietary_tags, category)
+        """
+        # Priority order: nutrients to relax first (by importance ascending)
+        relax_priority = [
+            "energy-kcal_100g",  # calories - least important
+            "fat_100g",
+            "carbohydrates_100g",
+            "sugars_100g",
+            "proteins_100g",     # high protein often intentional
+        ]
+        
+        # Find first constraint that matches the relax priority
+        for nutrient in relax_priority:
+            for idx, constraint in enumerate(query.nutrient_constraints):
+                if constraint.nutrient == nutrient:
+                    return (idx, constraint)
+        
+        # If no priority match, relax the first unvisited constraint
+        if query.nutrient_constraints:
+            return (0, query.nutrient_constraints[0])
+        
+        return None
+
     def _run_search(
         self, query: FoodQuery, result: PipelineResult
     ) -> PipelineResult:
-        """Search mode: retrieve products and generate insights."""
+        """Search mode: retrieve products and generate insights.
+        
+        If strict search returns no results, progressively relaxes constraints
+        (lowest importance first) and retries up to max attempts.
+        """
         products = self._adapter.search(query)
+        relaxation_log = []
+        
+        # If no results, try relaxing constraints
+        max_relaxation_attempts = len(query.nutrient_constraints)
+        attempt = 0
+        current_query = query
+        
+        while not products and attempt < max_relaxation_attempts:
+            # Find the best constraint to relax (lowest importance first)
+            constraint_to_relax = self._find_relaxable_constraint(current_query)
+            if constraint_to_relax is None:
+                # No more constraints to relax
+                break
+            
+            constraint_idx, constraint_obj = constraint_to_relax
+            
+            # Log and relax
+            relaxation_log.append(f"Relaxing constraint: {constraint_obj}")
+            current_query = current_query.copy_with_relaxed_constraint(constraint_idx, relax_factor=1.2)
+            
+            # Retry search
+            products = self._adapter.search(current_query)
+            attempt += 1
+        
+        # Log relaxations to result (only if we actually found products after relaxation)
+        if relaxation_log and products:
+            result.relaxation_log = relaxation_log
+        
         result.products = products
         result.insights = [self._insight_engine.analyze(p) for p in products]
         

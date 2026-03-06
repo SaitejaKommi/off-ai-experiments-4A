@@ -10,6 +10,7 @@ Converts free-text user queries into a FoodQuery dataclass that encodes:
 
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -45,6 +46,30 @@ class FoodQuery:
     detected_language: str = "en"
     normalized_text: Optional[str] = None
     max_results: int = 10
+
+    def copy_without_constraint(self, constraint_index: int) -> FoodQuery:
+        """Return a copy of this query with the constraint at *constraint_index* removed."""
+        new_query = copy.deepcopy(self)
+        if 0 <= constraint_index < len(new_query.nutrient_constraints):
+            new_query.nutrient_constraints.pop(constraint_index)
+        return new_query
+
+    def copy_with_relaxed_constraint(self, constraint_index: int, relax_factor: float = 1.2) -> FoodQuery:
+        """Return a copy of this query with the constraint at *constraint_index* relaxed.
+        
+        For "<=" constraints, increases bound by relax_factor (e.g. 1.2 = 20% increase).
+        For ">=" constraints, decreases bound by relax_factor (e.g. 1.2 = 20% decrease).
+        """
+        new_query = copy.deepcopy(self)
+        if 0 <= constraint_index < len(new_query.nutrient_constraints):
+            c = new_query.nutrient_constraints[constraint_index]
+            if c.operator in ("<=", "<"):
+                # Upper bound: increase it
+                c.value = c.value * relax_factor
+            elif c.operator in (">=", ">"):
+                # Lower bound: decrease it
+                c.value = c.value / relax_factor
+        return new_query
 
     def to_dict(self) -> dict:
         return {

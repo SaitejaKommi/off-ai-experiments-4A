@@ -95,6 +95,11 @@ class TestPassesConstraints:
         c = NutrientConstraint("proteins_100g", ">=", 10.0, "g")
         assert p.passes_constraints([c]) is False
 
+    def test_missing_nutrient_can_pass_in_relaxed_mode(self):
+        p = self._make_product({})
+        c = NutrientConstraint("proteins_100g", ">=", 10.0, "g")
+        assert p.passes_constraints([c], allow_missing=True) is True
+
     def test_multiple_constraints_all_pass(self):
         p = self._make_product({
             "proteins_100g": 12.0,

@@ -79,11 +79,24 @@ class Product:
         """Return a nutrient value or *None* if absent."""
         return self.nutrients.get(key)
 
-    def passes_constraints(self, constraints: List[NutrientConstraint]) -> bool:
-        """Return True if the product satisfies all nutrient constraints."""
+    def passes_constraints(
+        self,
+        constraints: List[NutrientConstraint],
+        allow_missing: bool = False,
+    ) -> bool:
+        """Return True if the product satisfies all nutrient constraints.
+
+        Parameters
+        ----------
+        allow_missing:
+            If True, products with missing constrained nutrient values are kept.
+            If False, missing constrained nutrient values fail the constraint.
+        """
         for c in constraints:
             value = self.nutrient(c.nutrient)
             if value is None:
+                if allow_missing:
+                    continue
                 return False  # explicit constraint requires available nutrient data
             if c.operator == ">=" and value < c.value:
                 return False
@@ -222,7 +235,8 @@ class OFFDataAdapter:
         params = self._build_search_params(query)
         raw_products = self._fetch_search(params, query.max_results)
         products = [_parse_product(p) for p in raw_products]
-        # Apply nutrient constraints locally (OFF API filtering is coarse)
+
+        # Apply nutrient constraints locally (OFF API filtering is coarse).
         if query.nutrient_constraints:
             products = [p for p in products if p.passes_constraints(query.nutrient_constraints)]
 

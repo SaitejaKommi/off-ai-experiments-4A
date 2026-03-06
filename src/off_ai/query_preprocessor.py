@@ -11,13 +11,14 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict
 
 
-_FR_HINTS = {
-    "sans", "avec", "et", "ou", "moins", "plus", "calories", "sucre", "graisse",
-    "gras", "proteine", "protéine", "vegan", "végétalien", "céréales", "muesli",
-    "huile", "palme", "chocolat", "bio", "faible", "riche",
+_FR_STRONG_HINTS = {
+    "sans", "avec", "moins", "sucre", "graisse", "gras", "proteine",
+    "proteines", "vegetalien", "vegetarien", "huile", "palme", "chocolat",
+    "faible", "riche", "biologique", "ajoute", "ajoutee", "ajoutes",
+    "cereale", "cereales",
 }
 
 
@@ -77,7 +78,7 @@ class QueryPreprocessor:
     def detect_language(self, text: str) -> str:
         ascii_text = _strip_accents(text.lower())
         tokens = set(re.findall(r"[a-zA-Z]+", ascii_text))
-        fr_score = len(tokens.intersection(_FR_HINTS))
+        fr_score = len(tokens.intersection(_FR_STRONG_HINTS))
         has_french_accent = ascii_text != text.lower()
         if fr_score >= 2 or has_french_accent:
             return "fr"
