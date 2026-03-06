@@ -1,0 +1,2 @@
+[console_scripts]
+off-ai = off_ai.cli:main
