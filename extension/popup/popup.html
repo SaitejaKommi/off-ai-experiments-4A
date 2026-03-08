@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OFF AI Search</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header with OFF Logo -->
+        <header>
+            <div class="logo-container">
+                <div class="logo">
+                    <img src="LOGO OFF.png" alt="Open Food Facts" class="logo-image">
+                </div>
+                <div class="ai-badge">
+                    <span class="ai-sparkle">✨</span>
+                    <span class="ai-text">AI Search</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- AI Search Section -->
+        <section class="search-section">
+            <div class="search-wrapper">
+                <div class="search-container">
+                    <div class="search-icon">🔍</div>
+                    <input 
+                        type="text" 
+                        id="searchInput" 
+                        placeholder="Ask me anything about food..."
+                        autocomplete="off"
+                    />
+                    <button id="searchButton">
+                        <span class="search-button-text">Search</span>
+                    </button>
+                </div>
+                <div class="search-hint">💡 Try: "high protein vegan snack" or "céréales bio"</div>
+            </div>
+
+            <!-- Example queries -->
+            <div class="examples">
+                <div class="examples-label">Quick searches:</div>
+                <div class="example-tags">
+                    <button class="example-tag">🥗 high protein snack</button>
+                    <button class="example-tag">🥣 low sugar cereal</button>
+                    <button class="example-tag">🌱 vegan breakfast</button>
+                    <button class="example-tag">🇫🇷 céréales faibles en sucre</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Query Interpretation Panel -->
+        <section id="interpretationPanel" class="interpretation-panel" style="display: none;">
+            <h3>Understanding your query</h3>
+            <div id="interpretationContent"></div>
+        </section>
+
+        <!-- Loading State -->
+        <div id="loadingState" class="loading-state" style="display: none;">
+            <div class="loader"></div>
+            <p>Analyzing your request...</p>
+        </div>
+
+        <!-- Results Section -->
+        <section id="resultsSection" class="results-section" style="display: none;">
+            <h2>Found products</h2>
+            <div id="productCards"></div>
+        </section>
+
+        <!-- Error State -->
+        <div id="errorState" class="error-state" style="display: none;">
+            <p><span id="errorMessage"></span></p>
+            <p style="font-size: 12px; margin-top: 8px; color: #999;">Make sure the API server is running</p>
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="empty-state" style="display: none;">
+            <p>No products found matching your criteria</p>
+            <p style="font-size: 12px; margin-top: 8px; color: #999;">Try a different search or broader terms</p>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
