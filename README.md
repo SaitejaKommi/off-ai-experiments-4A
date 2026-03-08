@@ -1,13 +1,27 @@
 # off-ai-experiments
 
-Beginner-friendly food search assistant built on Open Food Facts.
+AI-powered natural language search for Open Food Facts, available as:
+- ✅ **CLI tool** - Command-line interface
+- ✅ **REST API** - FastAPI server for web integration
+- ✅ **Browser Extension** - Chrome/Firefox extension with professional OFF-branded UI
 
-It lets users ask natural-language questions like:
+Users can ask natural-language questions like:
 - `high protein snack under 200 calories`
 - `healthier alternative to nutella`
 - `céréales faibles en sucre`
 
-and returns structured, explainable product results.
+and get structured, explainable product results.
+
+## 🎨 New Design (v2.0)
+
+The browser extension now features:
+- 🍊 **Authentic OFF branding** with official logo and colors
+- 🎨 **Orange/brown theme** matching OpenFoodFacts.org
+- ✨ **AI-powered interface** with animated search
+- 🔍 **Professional search bar** inspired by OFF website
+- 📱 **Modern UI** with smooth animations and hover effects
+
+See [extension/DESIGN.md](extension/DESIGN.md) for complete design documentation.
 
 ## What this project does
 
@@ -16,6 +30,27 @@ This project turns a plain user query into:
 2. Filtered products from Open Food Facts
 3. Health insights for each product
 4. Better alternatives (comparison mode)
+
+## ✨ Features
+
+### Core Functionality
+- ✅ **Natural language understanding** - Converts queries into structured filters
+- ✅ **Bilingual support** - English & French (EN/FR detection + normalization)
+- ✅ **Smart constraint relaxation** - Progressively relaxes filters if zero results
+- ✅ **Health scoring** - NutriScore and NOVA group classification
+- ✅ **Explainable AI** - Shows parsed query interpretation
+
+### Interfaces
+- ✅ **CLI tool** - Command-line interface with JSON output option
+- ✅ **REST API** - FastAPI server with `/nl-search` endpoint
+- ✅ **Browser Extension** - Chrome/Firefox popup with product cards
+
+### Advanced Features  
+- ✅ **Comparison mode** - "healthier alternative to [product]"
+- ✅ **Nutrition summaries** - Rule-based insights (High protein, Low sugar, etc.)
+- ✅ **Canada-focused** - Uses ca.openfoodfacts.org API
+- ✅ **Category mapping** - Recognizes cereals, snacks, beverages, etc.
+- ✅ **Dietary filters** - Vegan, gluten-free, organic, low-sodium, etc.
 
 ## Data source (API used)
 
@@ -83,19 +118,75 @@ Output includes:
 
 ## Quick start
 
-### 1) Install
+### CLI Usage
+
+#### 1) Install
 
 ```bash
 pip install -e .
 ```
 
-### 2) Run from CLI
+#### 2) Run from CLI
 
 ```bash
 off-ai "low sodium cereal for kids"
 off-ai --json "organic high fibre cereal"
 python -m off_ai "keto low carb bread"
 ```
+
+### Browser Extension + API Server
+
+#### 1) Start the API Server
+
+```bash
+python run_api.py
+```
+
+Server runs at `http://localhost:8000`
+
+API Documentation: `http://localhost:8000/docs`
+
+#### 2) Load the Extension
+
+**Chrome/Edge:**
+1. Open `chrome://extensions/`
+2. Enable "Developer mode"
+3. Click "Load unpacked"
+4. Select the `extension/` folder
+
+**Firefox:**
+1. Open `about:debugging#/runtime/this-firefox`
+2. Click "Load Temporary Add-on"
+3. Select `extension/manifest.json`
+
+#### 3) Use the Extension
+
+1. Click the extension icon in your browser toolbar
+2. Type a natural language query
+3. View results with NutriScore ratings
+4. Click products to open on Open Food Facts
+
+See [extension/README.md](extension/README.md) for detailed setup instructions.
+
+### API Endpoints
+
+**POST /nl-search**
+```bash
+curl -X POST http://localhost:8000/nl-search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"high protein vegan snack"}'
+```
+
+Response includes:
+- `interpreted_query` - Parsed constraints and tags
+- `products` - Product cards with name, NutriScore, summary, image, URL
+
+**GET /health**
+```bash
+curl http://localhost:8000/health
+```
+
+Returns API status and OFF API connectivity check.
 
 ## Python usage
 
@@ -114,6 +205,7 @@ src/off_ai/
   __init__.py
   __main__.py
   cli.py
+  api.py                     # 🆕 FastAPI REST wrapper
   query_preprocessor.py      # EN/FR detection + normalization
   intent_parser.py           # NL query -> FoodQuery
   data_adapter.py            # Open Food Facts API wrapper
@@ -121,12 +213,23 @@ src/off_ai/
   recommendation_engine.py   # better alternative ranking
   pipeline.py                # orchestration end-to-end
 
+extension/                   # 🆕 Browser Extension
+  manifest.json             # Extension configuration
+  popup/
+    popup.html              # Popup UI
+    popup.css               # Styling
+    popup.js                # Search logic & API calls
+  assets/                   # Extension icons
+  README.md                 # Extension setup guide
+
 tests/
   test_query_preprocessor.py
   test_intent_parser.py
   test_data_adapter.py
   test_insight_engine.py
   test_recommendation_engine.py
+
+run_api.py                  # 🆕 API server launcher
 ```
 
 ## Running tests
