@@ -2,8 +2,8 @@
 
 import pytest
 
-from off_ai.data_adapter import Product, _parse_product
-from off_ai.intent_parser import NutrientConstraint
+from off_ai.data_adapter import OFFDataAdapter, Product, _parse_product
+from off_ai.intent_parser import FoodQuery, NutrientConstraint
 
 
 # ---------------------------------------------------------------------------
@@ -160,3 +160,50 @@ class TestProductSerialization:
         )
         assert p.has_excluded_ingredient(["palm oil"]) is True
         assert p.has_excluded_ingredient(["soy"]) is False
+
+
+class TestAdapterFallbacks:
+    def test_search_retries_without_search_terms_but_keeps_category(self, monkeypatch):
+        adapter = OFFDataAdapter()
+        query = FoodQuery(raw_text="best olive oil", category="oils", max_results=5)
+
+        calls = []
+
+        def fake_fetch(params, max_results):
+            calls.append(dict(params))
+            if "search_terms" in params:
+                return []
+            return [
+                {
+                    "code": "1",
+                    "product_name": "Olive Oil",
+                    "nutriments": {},
+                    "categories_tags": ["en:oils"],
+                }
+            ]
+
+        monkeypatch.setattr(adapter, "_fetch_search", fake_fetch)
+        products = adapter.search(query)
+
+        assert len(products) == 1
+        assert len(calls) == 2
+        assert "countries_tags" in calls[0]
+        assert "countries_tags" in calls[1]
+        assert "categories_tags" in calls[0]
+        assert "categories_tags" in calls[1]
+        assert "search_terms" in calls[0]
+        assert "search_terms" not in calls[1]
+
+    def test_query_to_search_terms_removes_best(self):
+        adapter = OFFDataAdapter()
+        query = FoodQuery(raw_text="best Olive Oil")
+        terms = adapter._query_to_search_terms(query)
+        assert terms == "olive oil"
+
+    def test_query_to_search_terms_removes_conversational_noise(self):
+        adapter = OFFDataAdapter()
+        query = FoodQuery(
+            raw_text="Show me healthy snacks suitable for a low-sodium diet that are also vegan"
+        )
+        terms = adapter._query_to_search_terms(query)
+        assert terms == "snacks"

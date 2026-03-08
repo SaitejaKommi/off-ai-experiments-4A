@@ -15,6 +15,7 @@ Orchestrates the full query flow:
 
 from __future__ import annotations
 
+import logging
 import textwrap
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -24,6 +25,8 @@ from .insight_engine import InsightEngine, ProductInsight
 from .intent_parser import FoodQuery, IntentParser
 from .query_preprocessor import QueryPreprocessor
 from .recommendation_engine import Recommendation, RecommendationEngine
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -227,26 +230,42 @@ class FoodIntelligencePipeline:
         attempt = 0
         current_query = query
         
+        logger.info(f"Starting relaxation loop. Initial products: {len(products)}, max_attempts: {max_relaxation_attempts}")
         while not products and attempt < max_relaxation_attempts:
             # Find the best constraint to relax (lowest importance first)
             constraint_to_relax = self._find_relaxable_constraint(current_query)
             if constraint_to_relax is None:
                 # No more constraints to relax
+                logger.info("No more constraints to relax")
                 break
             
             constraint_idx, constraint_obj = constraint_to_relax
             
             # Log and relax
-            relaxation_log.append(f"Relaxing constraint: {constraint_obj}")
+            log_msg = f"Relaxing constraint: {constraint_obj}"
+            relaxation_log.append(log_msg)
+            logger.info(log_msg)
             current_query = current_query.copy_with_relaxed_constraint(constraint_idx, relax_factor=1.2)
             
-            # Retry search
+            # Retry search with relaxed constraints
             products = self._adapter.search(current_query)
+            logger.info(f"After relaxation attempt {attempt + 1}: {len(products)} products found")
             attempt += 1
         
-        # Log relaxations to result (only if we actually found products after relaxation)
-        if relaxation_log and products:
+        # Final fallback: if still no products after all relaxations,
+        # try again allowing products with missing nutrient data
+        if not products and relaxation_log:
+            logger.info("Final fallback: allowing products with missing nutrient data")
+            products = self._adapter.search(current_query, allow_missing_nutrients=True)
+            logger.info(f"After allowing missing nutrients: {len(products)} products found")
+            if products:
+                relaxation_log.append("Allowing products with incomplete nutritional data")
+        
+        # Always add relaxation_log to result (even if no products found)
+        # This gives transparency to the user about what was attempted
+        if relaxation_log:
             result.relaxation_log = relaxation_log
+            logger.info(f"Relaxation log added: {relaxation_log}")
         
         result.products = products
         result.insights = [self._insight_engine.analyze(p) for p in products]

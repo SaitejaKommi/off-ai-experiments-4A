@@ -20,9 +20,9 @@ from .intent_parser import FoodQuery, NutrientConstraint
 
 logger = logging.getLogger(__name__)
 
-# Base URLs
-_OFF_SEARCH_URL = "https://world.openfoodfacts.org/api/v2/search"
-_OFF_PRODUCT_URL = "https://world.openfoodfacts.org/api/v2/product/{barcode}.json"
+# Base URLs (Canada-focused)
+_OFF_SEARCH_URL = "https://ca.openfoodfacts.org/api/v2/search"
+_OFF_PRODUCT_URL = "https://ca.openfoodfacts.org/api/v2/product/{barcode}.json"
 
 # Fields to request from OFF API
 _PRODUCT_FIELDS = (
@@ -230,15 +230,37 @@ class OFFDataAdapter:
     # Public interface
     # ------------------------------------------------------------------
 
-    def search(self, query: FoodQuery) -> List[Product]:
-        """Search OFF for products matching *query*."""
+    def search(self, query: FoodQuery, allow_missing_nutrients: bool = False) -> List[Product]:
+        """Search OFF for products matching *query*.
+        
+        Parameters
+        ----------
+        allow_missing_nutrients:
+            If True, products with missing constrained nutrient values are kept.
+            Use this after constraint relaxation to be more lenient.
+        """
         params = self._build_search_params(query)
         raw_products = self._fetch_search(params, query.max_results)
+
+        # Fallback: broaden inside Canada by removing free-text search terms
+        # while preserving category filtering for relevance.
+        if (
+            not raw_products
+            and "categories_tags" in params
+            and "search_terms" in params
+        ):
+            broad_params = dict(params)
+            broad_params.pop("search_terms", None)
+            raw_products = self._fetch_search(broad_params, query.max_results)
+
         products = [_parse_product(p) for p in raw_products]
 
         # Apply nutrient constraints locally (OFF API filtering is coarse).
         if query.nutrient_constraints:
-            products = [p for p in products if p.passes_constraints(query.nutrient_constraints)]
+            products = [p for p in products if p.passes_constraints(
+                query.nutrient_constraints, 
+                allow_missing=allow_missing_nutrients
+            )]
 
         if query.excluded_ingredients:
             products = [
@@ -268,7 +290,7 @@ class OFFDataAdapter:
         """Fetch products from a specific OFF category (Canada only)."""
         params = {
             "categories_tags": category,
-            "countries_tags": "en:Canada",  # Filter for Canadian products only
+            "countries_tags": "en:canada",  # Canada-only
             "fields": _PRODUCT_FIELDS,
             "page_size": self.page_size,
             "sort_by": "nutriscore_score",
@@ -288,7 +310,8 @@ class OFFDataAdapter:
             "page_size": self.page_size,
             "action": "process",
             "json": "1",
-            "countries_tags": "en:Canada",  # Filter for Canadian products only
+            "countries_tags": "en:canada",  # Canada-only
+            "sort_by": self._resolve_sort_order(query),
         }
 
         # Free-text search from the original query (minus structural keywords)
@@ -316,12 +339,27 @@ class OFFDataAdapter:
 
         return params
 
+    def _resolve_sort_order(self, query: FoodQuery) -> str:
+        """Choose OFF sort key based on intent.
+
+        Health-constrained queries should surface healthier products first.
+        Generic discovery queries default to popularity.
+        """
+        health_words = {"healthy", "healthiest", "low", "high", "diet"}
+        raw_tokens = set(re.findall(r"[a-z]+", query.raw_text.lower()))
+
+        if query.nutrient_constraints or query.dietary_tags or raw_tokens.intersection(health_words):
+            return "nutriscore_score"
+        return "unique_scans_n"
+
     def _query_to_search_terms(self, query: FoodQuery) -> str:
         """Strip structural words from raw_text to produce a free-text search."""
         stop_words = {
             "high", "low", "under", "over", "at", "least", "most", "more", "than",
             "less", "and", "or", "with", "for", "a", "an", "the", "of", "in",
             "healthier", "alternative", "to", "instead", "replace",
+            "best", "top", "healthy", "healthiest", "good", "better",
+            "show", "me", "suitable", "diet", "also", "that", "are", "is", "as",
             "calorie", "calories", "kcal", "gram", "grams",
             "vegan", "vegetarian", "gluten-free", "gluten", "free",
             "organic", "keto", "paleo",
@@ -330,8 +368,10 @@ class OFFDataAdapter:
         from .intent_parser import NUTRIENT_ALIASES
         stop_words.update(NUTRIENT_ALIASES.keys())
 
-        words = query.raw_text.lower().split()
-        kept = [w for w in words if re.sub(r"[^a-z]", "", w) not in stop_words]
+        # Tokenize on alphabetic chunks so hyphenated terms like "low-sodium"
+        # become "low" + "sodium" and can be removed cleanly.
+        tokens = re.findall(r"[a-z]+", query.raw_text.lower())
+        kept = [t for t in tokens if t not in stop_words]
         return " ".join(kept)
 
     def _fetch_search(self, params: dict, max_results: int) -> List[Dict]:

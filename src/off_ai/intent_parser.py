@@ -209,6 +209,8 @@ CATEGORY_KEYWORDS: Dict[str, str] = {
     "jam": "spreads",
     "peanut butter": "spreads",
     "butter": "spreads",
+    "olive oils": "olive-oils",
+    "olive oil": "olive-oils",
     "oil": "oils",
     "meat": "meats",
     "fish": "fishes",
@@ -222,7 +224,7 @@ QUALITATIVE_THRESHOLDS: Dict[str, Dict[str, Tuple[str, float]]] = {
     "high": {
         "proteins_100g": (">=", 10.0),
         "fiber_100g": (">=", 6.0),
-        "energy-kcal_100g": (">=", 400.0),
+        "energy-kcal_100g": (">=", 800.0),
         "fat_100g": (">=", 17.5),
         "sugars_100g": (">=", 22.5),
         "sodium_100g": (">=", 0.6),
@@ -230,7 +232,7 @@ QUALITATIVE_THRESHOLDS: Dict[str, Dict[str, Tuple[str, float]]] = {
     "low": {
         "proteins_100g": ("<=", 3.0),
         "fiber_100g": ("<=", 2.0),
-        "energy-kcal_100g": ("<=", 150.0),
+        "energy-kcal_100g": ("<=", 400.0),
         "fat_100g": ("<=", 3.0),
         "sugars_100g": ("<=", 5.0),
         "sodium_100g": ("<=", 0.1),
@@ -239,7 +241,7 @@ QUALITATIVE_THRESHOLDS: Dict[str, Dict[str, Tuple[str, float]]] = {
     "less": {
         "proteins_100g": ("<=", 3.0),
         "fiber_100g": ("<=", 2.0),
-        "energy-kcal_100g": ("<=", 150.0),
+        "energy-kcal_100g": ("<=", 400.0),
         "fat_100g": ("<=", 3.0),
         "sugars_100g": ("<=", 5.0),
         "sodium_100g": ("<=", 0.1),
@@ -344,6 +346,9 @@ class IntentParser:
         """Parse *text* into a :class:`FoodQuery`."""
         query = FoodQuery(raw_text=text)
         lower = text.lower()
+        # Normalize hyphenated phrases (e.g. low-sodium -> low sodium)
+        # so qualitative extraction works consistently.
+        lower_normalized = lower.replace("-", " ")
 
         # 1. Alternative / comparison mode
         for pattern in (
@@ -357,10 +362,10 @@ class IntentParser:
                 break
 
         # 2. Category detection
-        query.category = self._extract_category(lower)
+        query.category = self._extract_category(lower_normalized)
 
         # 3. Dietary tags
-        query.dietary_tags = self._extract_dietary_tags(lower)
+        query.dietary_tags = self._extract_dietary_tags(lower_normalized)
 
         # 3.5. Excluded ingredients (no palm oil, etc.)
         query.excluded_ingredients = self._extract_excluded_ingredients(text)
@@ -369,7 +374,7 @@ class IntentParser:
         constraints = self._extract_numeric_constraints(text)
 
         # 5. Qualitative adjectives ("high protein", "low sodium", …)
-        constraints.extend(self._extract_qualitative_constraints(lower, constraints))
+        constraints.extend(self._extract_qualitative_constraints(lower_normalized, constraints))
 
         query.nutrient_constraints = constraints
         return query
