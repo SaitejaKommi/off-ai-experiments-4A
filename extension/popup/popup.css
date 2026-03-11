@@ -361,6 +361,12 @@ header {
     line-height: 1.4;
 }
 
+.product-brand {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
 .product-meta {
     display: flex;
     align-items: center;
@@ -411,6 +417,13 @@ header {
     content: "✓";
     color: var(--off-orange);
     font-weight: bold;
+}
+
+.product-explanation {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-light);
+    line-height: 1.4;
 }
 
 /* Error State */

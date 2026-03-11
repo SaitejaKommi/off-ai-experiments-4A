@@ -13,6 +13,7 @@ const productCards = document.getElementById("productCards");
 const errorState = document.getElementById("errorState");
 const errorMessage = document.getElementById("errorMessage");
 const emptyState = document.getElementById("emptyState");
+const quickSearchSection = document.querySelector(".examples");
 
 // Event Listeners
 searchButton.addEventListener("click", handleSearch);
@@ -41,6 +42,7 @@ async function handleSearch() {
     // Reset UI
     hideAllStates();
     showLoading();
+    setQuickSearchVisibility(false);
 
     try {
         const response = await fetch(`${API_BASE_URL}/nl-search`, {
@@ -52,7 +54,16 @@ async function handleSearch() {
         });
 
         if (!response.ok) {
-            throw new Error(`API Error: ${response.status}`);
+            let detail = `API Error: ${response.status}`;
+            try {
+                const errorBody = await response.json();
+                if (errorBody && errorBody.detail) {
+                    detail = errorBody.detail;
+                }
+            } catch {
+                // Ignore JSON parse failure and fall back to status text.
+            }
+            throw new Error(detail);
         }
 
         const data = await response.json();
@@ -60,11 +71,15 @@ async function handleSearch() {
         hideAllStates();
         
         // Show interpretation
-        displayInterpretation(data.interpreted_query);
+        displayInterpretation(data.interpreted_query, data.applied_filters || []);
+
+        if (data.ranking_rationale && data.ranking_rationale.length > 0) {
+            displayRankingRationale(data.ranking_rationale, data.performance || {});
+        }
         
         // Show relaxation info if applied
-        if (data.relaxation_applied && data.relaxation_info) {
-            displayRelaxationInfo(data.relaxation_info);
+        if (data.relaxation && data.relaxation.length > 0) {
+            displayRelaxationInfo(data.relaxation);
         }
         
         // Show results
@@ -81,41 +96,43 @@ async function handleSearch() {
     }
 }
 
+function setQuickSearchVisibility(isVisible) {
+    if (!quickSearchSection) return;
+    quickSearchSection.style.display = isVisible ? "block" : "none";
+}
+
 // Display query interpretation
-function displayInterpretation(query) {
+function displayInterpretation(query, appliedFilters) {
     let html = "";
 
     if (query.category) {
         html += `<div class="interpretation-item"><strong>Category:</strong> ${query.category}</div>`;
     }
 
-    if (query.dietary_tags && query.dietary_tags.length > 0) {
-        html += `<div class="interpretation-item"><strong>Tags:</strong> ${query.dietary_tags.join(", ")}</div>`;
+    const booleanTags = Object.keys(query).filter((key) => query[key] === true);
+    if (booleanTags.length > 0) {
+        html += `<div class="interpretation-item"><strong>Tags:</strong> ${booleanTags.join(", ")}</div>`;
     }
 
-    if (query.nutrient_constraints && Object.keys(query.nutrient_constraints).length > 0) {
-        const constraints = Object.entries(query.nutrient_constraints)
-            .map(([key, value]) => {
-                // Parse constraint key (e.g., "sugars_100g_<=")
-                const parts = key.split("_");
-                const operator = parts[parts.length - 1];
-                const nutrient = parts.slice(0, -1).join("_").replace("_100g", "");
-                
-                // Determine unit based on nutrient type
-                let unit = "g";
-                if (nutrient === "energy-kcal") {
-                    unit = "kcal";
-                } else if (nutrient === "sodium" || nutrient === "salt") {
-                    unit = "mg";
-                }
-                
-                // Format nutrient name for display
-                const displayName = nutrient.replace("energy-kcal", "calories").replace("-", " ");
-                
-                return `${displayName} ${operator} ${value}${unit}/100g`;
-            })
-            .join(", ");
+    const numericConstraints = Object.entries(query)
+        .filter(([key, value]) => (key.endsWith("_min") || key.endsWith("_max")) && typeof value === "number")
+        .map(([key, value]) => {
+            const op = key.endsWith("_min") ? ">=" : "<=";
+            const label = key.replace(/_(min|max)$/g, "").replaceAll("_", " ");
+            return `${label} ${op} ${value}`;
+        });
+
+    if (numericConstraints.length > 0) {
+        const constraints = numericConstraints.join(", ");
         html += `<div class="interpretation-item"><strong>Constraints:</strong> ${constraints}</div>`;
+    }
+
+    if (query.keywords && query.keywords.length > 0) {
+        html += `<div class="interpretation-item"><strong>Keywords:</strong> ${query.keywords.join(", ")}</div>`;
+    }
+
+    if (appliedFilters && appliedFilters.length > 0) {
+        html += `<div class="interpretation-item"><strong>Applied Filters:</strong> ${appliedFilters.join(" | ")}</div>`;
     }
 
     if (query.language) {
@@ -138,6 +155,20 @@ function displayRelaxationInfo(relaxationInfo) {
     interpretationContent.innerHTML += html;
 }
 
+function displayRankingRationale(rationale, performance) {
+    if (!rationale || rationale.length === 0) return;
+
+    let html = '<div class="interpretation-item" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 135, 20, 0.2);">';
+    html += '<strong>Why these products?</strong><br>';
+    html += `<span style="font-size: 11px; color: var(--text-secondary);">${rationale.slice(0, 4).map(item => `• ${item}`).join(" ")}</span>`;
+    if (performance.total_ms !== undefined) {
+        html += `<br><span style="font-size: 10px; color: var(--text-light);">${performance.total_ms} ms total | ${performance.results_returned || 0} results</span>`;
+    }
+    html += '</div>';
+
+    interpretationContent.innerHTML += html;
+}
+
 // Display product results
 function displayResults(products) {
     productCards.innerHTML = "";
@@ -150,10 +181,34 @@ function displayResults(products) {
     resultsSection.style.display = "block";
 }
 
+function normalizeDisplayText(value, fallback = "") {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed || fallback;
+    }
+    if (Array.isArray(value)) {
+        const first = value.find(v => v !== null && v !== undefined);
+        return normalizeDisplayText(first, fallback);
+    }
+    if (typeof value === "object") {
+        if (typeof value.text === "string") return normalizeDisplayText(value.text, fallback);
+        if (typeof value.name === "string") return normalizeDisplayText(value.name, fallback);
+        return fallback;
+    }
+    return String(value);
+}
+
 // Create a single product card
 function createProductCard(product) {
     const card = document.createElement("div");
     card.className = "product-card";
+
+    const nameValue = normalizeDisplayText(product.name, "Unknown Product");
+    const brandValue = normalizeDisplayText(product.brand, "Unknown brand");
+    const categoryValue = normalizeDisplayText(product.category, "");
+    const summaryValue = normalizeDisplayText(product.summary, "See details");
+    const imageValue = normalizeDisplayText(product.image, "");
     
     // Click handler to open product page
     card.addEventListener("click", () => {
@@ -164,11 +219,11 @@ function createProductCard(product) {
 
     // Product image
     const imageContainer = document.createElement("div");
-    if (product.image) {
+    if (imageValue && imageValue.startsWith("http")) {
         const img = document.createElement("img");
         img.className = "product-image";
-        img.src = product.image;
-        img.alt = product.name;
+        img.src = imageValue;
+        img.alt = nameValue;
         img.onerror = () => {
             // Fallback to placeholder if image fails to load
             imageContainer.innerHTML = '<div class="product-image-placeholder">🍽️</div>';
@@ -185,7 +240,11 @@ function createProductCard(product) {
     // Product name
     const name = document.createElement("div");
     name.className = "product-name";
-    name.textContent = product.name || "Unknown Product";
+    name.textContent = nameValue;
+
+    const brand = document.createElement("div");
+    brand.className = "product-brand";
+    brand.textContent = brandValue;
 
     // Meta (NutriScore + Category)
     const meta = document.createElement("div");
@@ -198,22 +257,32 @@ function createProductCard(product) {
         meta.appendChild(badge);
     }
 
-    if (product.category) {
+    if (categoryValue) {
         const category = document.createElement("span");
         category.className = "product-category";
-        category.textContent = truncateText(product.category, 20);
+        category.textContent = truncateText(categoryValue, 20);
         meta.appendChild(category);
     }
 
     // Summary
     const summary = document.createElement("div");
     summary.className = "product-summary";
-    summary.textContent = product.summary || "See details";
+    summary.textContent = summaryValue;
+
+    const explanation = document.createElement("div");
+    explanation.className = "product-explanation";
+    explanation.textContent = product.explanation && product.explanation.length > 0
+        ? product.explanation.slice(0, 2).join(" • ")
+        : "";
 
     // Assemble info section
     info.appendChild(name);
+    info.appendChild(brand);
     info.appendChild(meta);
     info.appendChild(summary);
+    if (explanation.textContent) {
+        info.appendChild(explanation);
+    }
 
     // Assemble card
     card.appendChild(imageContainer);
