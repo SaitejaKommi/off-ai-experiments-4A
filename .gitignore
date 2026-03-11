@@ -23,3 +23,8 @@ htmlcov/
 .vscode/
 .idea/
 *.swp
+
+# Local datasets and scratch inspection scripts
+off_dev.parquet
+src/off_ai/food.parquet
+schema_check.py

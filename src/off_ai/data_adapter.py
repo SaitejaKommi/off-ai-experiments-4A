@@ -10,6 +10,7 @@ import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import duckdb
 
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PARQUET_FILENAME = "off_dev.parquet"
 DEFAULT_DATASET_ENV_VAR = "OFF_PARQUET_PATH"
+CANADA_OFF_BASE_URL = "https://ca.openfoodfacts.org"
 
 _NUTRIENT_ALIASES: Dict[str, List[str]] = {
     "proteins_100g": ["proteins_100g", "nutriments.proteins_100g"],
@@ -52,6 +54,7 @@ _FIELD_CANDIDATES: Dict[str, List[str]] = {
     "additives_tags": ["additives_tags"],
     "additives_n": ["additives_n"],
     "unique_scans_n": ["unique_scans_n"],
+    "countries_tags": ["countries_tags", "country_tags"],
 }
 
 _LABEL_PATTERNS: Dict[str, List[str]] = {
@@ -315,6 +318,21 @@ def _normalize_text_value(value: Any, default: str = "") -> str:
     return default
 
 
+def _normalize_product_url(raw_url: Any, barcode: str) -> str:
+    normalized_url = _normalize_text_value(raw_url, default="")
+
+    if normalized_url:
+        parsed = urlsplit(normalized_url)
+        if parsed.netloc.endswith("openfoodfacts.org"):
+            path = parsed.path or (f"/product/{barcode}" if barcode else "")
+            return urlunsplit(("https", "ca.openfoodfacts.org", path, parsed.query, parsed.fragment))
+        return normalized_url
+
+    if barcode:
+        return f"{CANADA_OFF_BASE_URL}/product/{barcode}"
+    return ""
+
+
 def _barcode_to_off_path(barcode: str) -> str:
     """Convert barcode to OFF image path segments.
 
@@ -405,9 +423,7 @@ def _parse_product(raw: Dict[str, Any]) -> Product:
     additives = [entry.upper().replace("EN:", "") for entry in additives_raw]
 
     barcode = str(raw.get("code") or raw.get("barcode") or "")
-    url = raw.get("url") or raw.get("product_url") or ""
-    if not url and barcode:
-        url = f"https://world.openfoodfacts.org/product/{barcode}"
+    url = _normalize_product_url(raw.get("url") or raw.get("product_url"), barcode)
     image_url = _derive_image_url(raw, barcode)
 
     return Product(
@@ -459,6 +475,7 @@ class OFFDataAdapter:
         if self.parquet_path.exists():
             self._initialize_products_view()
             self._schema = self._load_schema()
+            self._create_indices()
         else:
             self._schema = {}
         self._field_cache: Dict[str, Optional[str]] = {}
@@ -670,6 +687,15 @@ class OFFDataAdapter:
             f"CREATE OR REPLACE VIEW {self._source_relation} AS SELECT * FROM read_parquet('{parquet}')"
         )
         self._view_initialized = True
+
+    def _create_indices(self) -> None:
+        """Note: DuckDB indices on views are not supported; skipping index creation.
+        
+        When using parquet directly as a table (not a view), indices would improve
+        performance on frequently filtered columns: categories_tags, countries_tags,
+        nutriscore_grade, ingredients_text.
+        """
+        pass
 
     def _load_schema(self) -> Dict[str, str]:
         rows = self._con.execute(f"DESCRIBE SELECT * FROM {self._source_relation}").fetchall()

@@ -43,6 +43,7 @@ class QueryBuilder:
         label_text = adapter._label_text_expr()
         ingredient_text = adapter._ingredient_text_expr()
         category_text = adapter._category_text_expr()
+        countries_text = adapter._field_expr("countries_tags")
 
         where_clauses: List[str] = []
         parameters: List[Any] = []
@@ -50,6 +51,10 @@ class QueryBuilder:
         product_name_expr = adapter._field_expr("product_name")
         if product_name_expr is not None:
             where_clauses.append(f"NULLIF(TRIM(CAST({product_name_expr} AS VARCHAR)), '') IS NOT NULL")
+
+        if countries_text is not None:
+            where_clauses.append(f"ARRAY_TO_STRING({countries_text}, ',') ILIKE ?")
+            parameters.append("%canada%")
 
         if constraints.category_tag and category_text:
             where_clauses.append(f"{category_text} ILIKE ?")

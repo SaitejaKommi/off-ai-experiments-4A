@@ -124,6 +124,29 @@ def test_parse_product_derives_image_url_from_images_struct():
     assert product.image_url.endswith("/000/010/120/9159/front_fr.4.400.jpg")
 
 
+def test_parse_product_rewrites_off_world_url_to_canada_site():
+    raw = {
+        "code": "3017620422003",
+        "product_name": "Nutella",
+        "url": "https://world.openfoodfacts.org/product/3017620422003/nutella",
+    }
+
+    product = _parse_product(raw)
+
+    assert product.product_url == "https://ca.openfoodfacts.org/product/3017620422003/nutella"
+
+
+def test_parse_product_defaults_missing_off_url_to_canada_site():
+    raw = {
+        "code": "3017620422003",
+        "product_name": "Nutella",
+    }
+
+    product = _parse_product(raw)
+
+    assert product.product_url == "https://ca.openfoodfacts.org/product/3017620422003"
+
+
 def test_product_passes_constraints_works_with_canonical_names():
     product = Product(barcode="1", name="Test", nutrients={"energy_kcal_100g": 150.0})
     constraint = NutrientConstraint("energy_kcal_100g", "<=", 200.0, "kcal")
