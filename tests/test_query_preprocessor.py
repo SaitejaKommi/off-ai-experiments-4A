@@ -27,3 +27,11 @@ def test_normalize_common_typos():
     p = QueryPreprocessor()
     result = p.preprocess("0 sugar choclates")
     assert "chocolates" in result.normalized_text
+
+
+def test_normalize_french_low_sodium_phrase():
+    p = QueryPreprocessor()
+    result = p.preprocess("collation vegetalien faible en sodium")
+    assert "snack" in result.normalized_text
+    assert "vegan" in result.normalized_text
+    assert "low sodium" in result.normalized_text

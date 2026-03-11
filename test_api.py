@@ -12,8 +12,8 @@ response = requests.post(url, json=data)
 result = response.json()
 
 print(f"\nProducts found: {len(result['products'])}")
-print(f"Relaxation applied: {result['relaxation_applied']}")
-print(f"Relaxation info: {result['relaxation_info']}")
+print(f"Relaxation: {result.get('relaxation', [])}")
+print(f"Applied filters: {result.get('applied_filters', [])}")
 print(f"\nInterpreted query:")
 for key, value in result['interpreted_query'].items():
     print(f"  {key}: {value}")

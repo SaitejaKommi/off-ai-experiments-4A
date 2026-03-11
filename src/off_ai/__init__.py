@@ -14,6 +14,10 @@ from .data_adapter import OFFDataAdapter, Product
 from .insight_engine import InsightEngine, ProductInsight
 from .query_preprocessor import QueryPreprocessor
 from .recommendation_engine import RecommendationEngine, Recommendation
+from .constraint_extractor import ConstraintExtractor, ExtractedConstraints
+from .taxonomy_mapper import TaxonomyMapper
+from .query_builder import QueryBuilder
+from .post_processor import RankingPostProcessor
 from .pipeline import FoodIntelligencePipeline
 
 __all__ = [
@@ -26,5 +30,10 @@ __all__ = [
     "QueryPreprocessor",
     "RecommendationEngine",
     "Recommendation",
+    "ConstraintExtractor",
+    "ExtractedConstraints",
+    "TaxonomyMapper",
+    "QueryBuilder",
+    "RankingPostProcessor",
     "FoodIntelligencePipeline",
 ]

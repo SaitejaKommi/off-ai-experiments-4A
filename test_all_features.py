@@ -45,27 +45,23 @@ for query_text, description in test_queries:
         # Show interpretation
         interp = result['interpreted_query']
         print(f"  Category: {interp.get('category', 'None')}")
-        
-        dietary = interp.get('dietary_tags', [])
+
+        dietary = [key for key, value in interp.items() if value is True]
         if dietary:
             print(f"  Dietary tags: {', '.join(dietary)}")
-        
-        exclusions = interp.get('ingredient_exclusions', [])
+
+        exclusions = interp.get('excluded_ingredients', [])
         if exclusions:
             print(f"  Excluded ingredients: {', '.join(exclusions)}")
-        
+
         # Show nutrient constraints
-        constraints = interp.get('nutrient_constraints', {})
+        constraints = {k: v for k, v in interp.items() if k.endswith('_min') or k.endswith('_max')}
         if constraints:
             constraint_list = []
             for key, value in constraints.items():
-                # Parse constraint
-                if '<=' in key:
-                    nutrient = key.replace('_100g_<=', '').replace('_', '-')
-                    constraint_list.append(f"{nutrient} ≤ {value}")
-                elif '>=' in key:
-                    nutrient = key.replace('_100g_>=', '').replace('_', '-')
-                    constraint_list.append(f"{nutrient} ≥ {value}")
+                nutrient = key.rsplit('_', 1)[0].replace('_', '-')
+                operator = "≥" if key.endswith("_min") else "≤"
+                constraint_list.append(f"{nutrient} {operator} {value}")
             if constraint_list:
                 print(f"  Nutrient constraints: {', '.join(constraint_list)}")
         
@@ -73,8 +69,8 @@ for query_text, description in test_queries:
         products_count = len(result['products'])
         print(f"  Products found: {products_count}")
         
-        if result.get('relaxation_applied', False):
-            print(f"  ⚠️  Relaxation: {', '.join(result.get('relaxation_info', []))}")
+        if result.get('relaxation', []):
+            print(f"  ⚠️  Relaxation: {', '.join(result.get('relaxation', []))}")
         
         if products_count > 0:
             first_prod = result['products'][0]

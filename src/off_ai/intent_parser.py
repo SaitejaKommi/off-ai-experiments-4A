@@ -1,12 +1,4 @@
-"""
-intent_parser.py – Natural language → structured food query
-
-Converts free-text user queries into a FoodQuery dataclass that encodes:
-- Nutrient constraints  (e.g. protein >= 10, calories <= 200)
-- Dietary tags          (vegan, gluten-free, organic, …)
-- Product category      (snacks, cereal, beverages, …)
-- Comparison mode       ("healthier alternative to <product>")
-"""
+"""Natural language intent parsing for DuckDB-backed food search."""
 
 from __future__ import annotations
 
@@ -22,12 +14,12 @@ from typing import Dict, List, Optional, Tuple
 
 @dataclass
 class NutrientConstraint:
-    """A single nutrient bound, e.g. protein >= 10 g."""
+    """A single numeric nutrient filter."""
 
-    nutrient: str          # canonical name, e.g. "proteins_100g"
-    operator: str          # ">=" | "<=" | "==" | ">" | "<"
-    value: float           # numeric threshold
-    unit: str = "g"        # "g" | "kcal" | "mg"
+    nutrient: str
+    operator: str
+    value: float
+    unit: str = "g"
 
     def __str__(self) -> str:
         return f"{self.nutrient} {self.operator} {self.value} {self.unit}"
@@ -41,6 +33,8 @@ class FoodQuery:
     category: Optional[str] = None
     nutrient_constraints: List[NutrientConstraint] = field(default_factory=list)
     dietary_tags: List[str] = field(default_factory=list)
+    search_terms: List[str] = field(default_factory=list)
+    ranking_preferences: List[str] = field(default_factory=list)
     comparison_product: Optional[str] = None   # "healthier alternative to X"
     excluded_ingredients: List[str] = field(default_factory=list)  # e.g. ["palm oil"]
     detected_language: str = "en"
@@ -85,6 +79,8 @@ class FoodQuery:
                 for c in self.nutrient_constraints
             ],
             "dietary_tags": self.dietary_tags,
+            "search_terms": self.search_terms,
+            "ranking_preferences": self.ranking_preferences,
             "excluded_ingredients": self.excluded_ingredients,
             "detected_language": self.detected_language,
             "normalized_text": self.normalized_text,
@@ -104,6 +100,10 @@ class FoodQuery:
             parts.append(str(c))
         for t in self.dietary_tags:
             parts.append(f"{t} = true")
+        for pref in self.ranking_preferences:
+            parts.append(f"prefer {pref}")
+        if self.search_terms:
+            parts.append(f"text = {', '.join(self.search_terms)}")
         for ing in self.excluded_ingredients:
             parts.append(f"no {ing}")
         if self.comparison_product:
@@ -115,20 +115,23 @@ class FoodQuery:
 # Keyword mappings
 # ---------------------------------------------------------------------------
 
-# Maps query keywords → OFF field names
 NUTRIENT_ALIASES: Dict[str, str] = {
     "protein": "proteins_100g",
     "proteins": "proteins_100g",
-    "calorie": "energy-kcal_100g",
-    "calories": "energy-kcal_100g",
-    "kcal": "energy-kcal_100g",
+    "calorie": "energy_kcal_100g",
+    "calories": "energy_kcal_100g",
+    "kcal": "energy_kcal_100g",
+    "energy": "energy_kcal_100g",
     "fat": "fat_100g",
     "fats": "fat_100g",
-    "saturated fat": "saturated-fat_100g",
-    "saturated": "saturated-fat_100g",
+    "saturated fat": "saturated_fat_100g",
+    "saturated fats": "saturated_fat_100g",
+    "saturated": "saturated_fat_100g",
     "sugar": "sugars_100g",
     "sugars": "sugars_100g",
+    "carb": "carbohydrates_100g",
     "carbs": "carbohydrates_100g",
+    "carbohydrate": "carbohydrates_100g",
     "carbohydrates": "carbohydrates_100g",
     "sodium": "sodium_100g",
     "salt": "salt_100g",
@@ -136,42 +139,47 @@ NUTRIENT_ALIASES: Dict[str, str] = {
     "fibre": "fiber_100g",
 }
 
-DIETARY_TAGS: List[str] = [
-    "vegan",
-    "vegetarian",
-    "gluten-free",
-    "gluten free",
-    "organic",
-    "dairy-free",
-    "dairy free",
-    "lactose-free",
-    "lactose free",
-    "halal",
-    "kosher",
-    "low-sugar",
-    "low sugar",
-    "low-fat",
-    "low fat",
-    "low-sodium",
-    "low sodium",
-    "high-protein",
-    "high protein",
-    "keto",
-    "paleo",
-    "whole grain",
-    "wholegrain",
-    "no additives",
-    "no preservatives",
-]
+NUTRIENT_UNITS: Dict[str, str] = {
+    "proteins_100g": "g",
+    "energy_kcal_100g": "kcal",
+    "fat_100g": "g",
+    "saturated_fat_100g": "g",
+    "sugars_100g": "g",
+    "carbohydrates_100g": "g",
+    "sodium_100g": "g",
+    "salt_100g": "g",
+    "fiber_100g": "g",
+}
+
+DIETARY_TAG_ALIASES: Dict[str, str] = {
+    "vegan": "vegan",
+    "plant based": "vegan",
+    "plant-based": "vegan",
+    "vegetarian": "vegetarian",
+    "gluten free": "gluten-free",
+    "gluten-free": "gluten-free",
+    "organic": "organic",
+    "bio": "organic",
+    "dairy free": "dairy-free",
+    "dairy-free": "dairy-free",
+    "lactose free": "lactose-free",
+    "lactose-free": "lactose-free",
+    "halal": "halal",
+    "kosher": "kosher",
+}
 
 CATEGORY_KEYWORDS: Dict[str, str] = {
     "snack": "snacks",
     "snacks": "snacks",
+    "healthy snack": "snacks",
     "cereal": "cereals",
     "cereals": "cereals",
     "cerals": "cereals",  # common typo
     "muesli": "cereals",
     "breakfast cereal": "cereals",
+    "granola": "cereals",
+    "bar": "snack-bars",
+    "bars": "snack-bars",
     "beverage": "beverages",
     "beverages": "beverages",
     "drink": "beverages",
@@ -219,12 +227,12 @@ CATEGORY_KEYWORDS: Dict[str, str] = {
     "fruit": "fruits",
 }
 
-# Qualitative descriptors → rough numeric thresholds per 100 g
+# Qualitative descriptors -> numeric thresholds per 100 g
 QUALITATIVE_THRESHOLDS: Dict[str, Dict[str, Tuple[str, float]]] = {
     "high": {
         "proteins_100g": (">=", 10.0),
         "fiber_100g": (">=", 6.0),
-        "energy-kcal_100g": (">=", 800.0),
+        "energy_kcal_100g": (">=", 800.0),
         "fat_100g": (">=", 17.5),
         "sugars_100g": (">=", 22.5),
         "sodium_100g": (">=", 0.6),
@@ -232,22 +240,173 @@ QUALITATIVE_THRESHOLDS: Dict[str, Dict[str, Tuple[str, float]]] = {
     "low": {
         "proteins_100g": ("<=", 3.0),
         "fiber_100g": ("<=", 2.0),
-        "energy-kcal_100g": ("<=", 400.0),
+        "energy_kcal_100g": ("<=", 400.0),
         "fat_100g": ("<=", 3.0),
         "sugars_100g": ("<=", 5.0),
         "sodium_100g": ("<=", 0.1),
-        "saturated-fat_100g": ("<=", 1.5),
+        "saturated_fat_100g": ("<=", 1.5),
     },
     "less": {
         "proteins_100g": ("<=", 3.0),
         "fiber_100g": ("<=", 2.0),
-        "energy-kcal_100g": ("<=", 400.0),
+        "energy_kcal_100g": ("<=", 400.0),
         "fat_100g": ("<=", 3.0),
         "sugars_100g": ("<=", 5.0),
         "sodium_100g": ("<=", 0.1),
-        "saturated-fat_100g": ("<=", 1.5),
+        "saturated_fat_100g": ("<=", 1.5),
     },
 }
+
+HEALTH_PREFERENCES = {
+    "healthy": "healthy",
+    "healthiest": "healthy",
+    "nutritious": "healthy",
+    "clean": "healthy",
+    "better for you": "healthy",
+    "for kids": "kids",
+    "kid friendly": "kids",
+    "kid-friendly": "kids",
+    "kids": "kids",
+    "children": "kids",
+}
+
+EXCLUDED_INGREDIENT_PATTERNS: Dict[str, str] = {
+    r"(?:no|without|free\s+from)\s+palm\s+oil": "palm oil",
+    r"(?:no|without|free\s+from)\s+soy": "soy",
+    r"(?:no|without|free\s+from)\s+dairy": "dairy",
+    r"(?:no|without|free\s+from)\s+gluten": "gluten",
+}
+
+STRUCTURAL_STOPWORDS = {
+    "show",
+    "me",
+    "find",
+    "best",
+    "top",
+    "foods",
+    "food",
+    "product",
+    "products",
+    "suitable",
+    "that",
+    "are",
+    "also",
+    "for",
+    "diet",
+    "a",
+    "an",
+    "the",
+    "with",
+    "and",
+    "or",
+    "to",
+    "of",
+    "under",
+    "over",
+    "below",
+    "above",
+    "less",
+    "than",
+    "more",
+    "at",
+    "least",
+    "most",
+    "maximum",
+    "minimum",
+    "per",
+    "100g",
+    "100ml",
+    "diet",
+    "healthy",
+    "healthiest",
+    "kids",
+    "kid",
+    "children",
+    # Nutrient qualifiers — consumed by parser, must not become text search terms
+    "high",
+    "low",
+    "rich",
+    "light",
+    "lite",
+    "zero",
+    "no",
+    "without",
+    "free",
+    "plus",
+    "extra",
+    "ultra",
+    "super",
+    "lower",
+    "higher",
+    "reduced",
+    "added",
+    "good",
+    "source",
+    "excellent",
+    # Common English conversational/grammatical words that carry no food meaning
+    "i",
+    "im",
+    "am",
+    "in",
+    "on",
+    "it",
+    "its",
+    "is",
+    "be",
+    "been",
+    "was",
+    "were",
+    "do",
+    "does",
+    "did",
+    "have",
+    "has",
+    "had",
+    "will",
+    "would",
+    "can",
+    "could",
+    "should",
+    "may",
+    "might",
+    "my",
+    "get",
+    "got",
+    "give",
+    "want",
+    "need",
+    "like",
+    "go",
+    "going",
+    "looking",
+    "searching",
+    "search",
+    "suggest",
+    "suggested",
+    "recommend",
+    "recommended",
+    "tell",
+    "know",
+    "help",
+    "has",
+    "which",
+    "please",
+    "just",
+    "really",
+    "very",
+    "quite",
+    "some",
+    "any",
+    "all",
+    "not",
+    "from",
+    "out",
+    "up",
+}
+
+_NUTRIENT_PATTERN = "|".join(
+    sorted((re.escape(term) for term in NUTRIENT_ALIASES.keys()), key=len, reverse=True)
+)
 
 
 # ---------------------------------------------------------------------------
@@ -255,11 +414,7 @@ QUALITATIVE_THRESHOLDS: Dict[str, Dict[str, Tuple[str, float]]] = {
 # ---------------------------------------------------------------------------
 
 class IntentParser:
-    """Rule-based natural-language food query parser.
-
-    Designed so that an LLM back-end can later replace or augment the
-    rule engine without changing the public API (parse → FoodQuery).
-    """
+    """Rule-driven semantic parser that maps natural language to filters."""
 
     # Numeric constraint patterns, e.g. "under 200 calories", "≥10g protein"
     _NUMERIC_PATTERNS: List[Tuple[re.Pattern, str]] = [
@@ -267,7 +422,7 @@ class IntentParser:
             re.compile(
                 r"(under|less than|below|at most|max(?:imum)?|<=?)\s*"
                 r"(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
-                r"(of\s+)?({nutrients})".format(nutrients="|".join(NUTRIENT_ALIASES)),
+                r"(of\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
                 re.IGNORECASE,
             ),
             "upper",
@@ -276,7 +431,7 @@ class IntentParser:
             re.compile(
                 r"({nutrients})\s*(?:of\s+)?(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
                 r"(or less|or under|max(?:imum)?|and under|<=?)".format(
-                    nutrients="|".join(NUTRIENT_ALIASES)
+                    nutrients=_NUTRIENT_PATTERN
                 ),
                 re.IGNORECASE,
             ),
@@ -286,7 +441,7 @@ class IntentParser:
             re.compile(
                 r"(over|more than|above|at least|min(?:imum)?|>=?)\s*"
                 r"(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
-                r"(of\s+)?({nutrients})".format(nutrients="|".join(NUTRIENT_ALIASES)),
+                r"(of\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
                 re.IGNORECASE,
             ),
             "lower",
@@ -295,7 +450,7 @@ class IntentParser:
             re.compile(
                 r"({nutrients})\s*(?:of\s+)?(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
                 r"(or more|or over|min(?:imum)?|and over|>=?)".format(
-                    nutrients="|".join(NUTRIENT_ALIASES)
+                    nutrients=_NUTRIENT_PATTERN
                 ),
                 re.IGNORECASE,
             ),
@@ -306,7 +461,7 @@ class IntentParser:
     # "X calories" / "X g protein" shorthand
     _BARE_NUMERIC = re.compile(
         r"(\d+(?:\.\d+)?)\s*(kcal|cal(?:ories)?|g|mg)\s+"
-        r"(?:of\s+)?({nutrients})".format(nutrients="|".join(NUTRIENT_ALIASES)),
+        r"(?:of\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
         re.IGNORECASE,
     )
 
@@ -316,19 +471,11 @@ class IntentParser:
         re.IGNORECASE,
     )
 
-    # Zero sugar / no sugar patterns: "0 added sugar", "zero sugar", "no sugar"
     _ZERO_SUGAR_PATTERN = re.compile(
         r"(?:0|zero|no|none)\s*(?:added\s+)?sugar",
         re.IGNORECASE,
     )
 
-    # Ingredient exclusion patterns: "no palm oil", "without palm oil"
-    _NO_PALM_OIL_PATTERN = re.compile(
-        r"(?:no|without|free\s+from)\s+(?:palm\s+)?oil|no\s+palm",
-        re.IGNORECASE,
-    )
-
-    # "alternative to <product>" or "instead of <product>"
     _ALTERNATIVE_PATTERN = re.compile(
         r"(?:healthier\s+)?alternative\s+to\s+(.+?)(?:\s*$|[,.])",
         re.IGNORECASE,
@@ -346,11 +493,8 @@ class IntentParser:
         """Parse *text* into a :class:`FoodQuery`."""
         query = FoodQuery(raw_text=text)
         lower = text.lower()
-        # Normalize hyphenated phrases (e.g. low-sodium -> low sodium)
-        # so qualitative extraction works consistently.
         lower_normalized = lower.replace("-", " ")
 
-        # 1. Alternative / comparison mode
         for pattern in (
             self._ALTERNATIVE_PATTERN,
             self._INSTEAD_OF_PATTERN,
@@ -361,146 +505,230 @@ class IntentParser:
                 query.comparison_product = m.group(1).strip()
                 break
 
-        # 2. Category detection
-        query.category = self._extract_category(lower_normalized)
-
-        # 3. Dietary tags
-        query.dietary_tags = self._extract_dietary_tags(lower_normalized)
-
-        # 3.5. Excluded ingredients (no palm oil, etc.)
         query.excluded_ingredients = self._extract_excluded_ingredients(text)
+        category_text = lower_normalized
+        for ingredient in query.excluded_ingredients:
+            normalized = ingredient.strip().lower()
+            if not normalized:
+                continue
+            category_text = re.sub(rf"\b{re.escape(normalized)}\b", " ", category_text)
+            if " " in normalized:
+                category_text = re.sub(rf"\b{re.escape(normalized.replace(' ', '-'))}\b", " ", category_text)
 
-        # 4. Nutrient constraints – explicit numeric
+        query.category = self._extract_category(category_text)
+        query.dietary_tags = self._extract_dietary_tags(lower_normalized)
         constraints = self._extract_numeric_constraints(text)
-
-        # 5. Qualitative adjectives ("high protein", "low sodium", …)
         constraints.extend(self._extract_qualitative_constraints(lower_normalized, constraints))
-
-        query.nutrient_constraints = constraints
+        query.nutrient_constraints = self._dedupe_constraints(constraints)
+        query.ranking_preferences = self._extract_ranking_preferences(lower_normalized)
+        query.search_terms = self._extract_search_terms(lower_normalized, query)
         return query
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
+    def _extract_category(self, text: str) -> Optional[str]:
+        best_match: Optional[Tuple[int, int, str]] = None
+        for keyword, category in CATEGORY_KEYWORDS.items():
+            for match in re.finditer(rf"\b{re.escape(keyword)}\b", text):
+                candidate = (match.start(), len(keyword), category)
+                if best_match is None or candidate[0] > best_match[0] or (
+                    candidate[0] == best_match[0] and candidate[1] > best_match[1]
+                ):
+                    best_match = candidate
+        return best_match[2] if best_match else None
 
-    def _extract_category(self, lower: str) -> Optional[str]:
-        # Prefer longer matches to avoid "chip" matching inside "chocolate"
-        matched: Optional[Tuple[int, str]] = None
-        for kw, cat in CATEGORY_KEYWORDS.items():
-            if kw in lower:
-                if matched is None or len(kw) > matched[0]:
-                    matched = (len(kw), cat)
-        return matched[1] if matched else None
-
-    def _extract_dietary_tags(self, lower: str) -> List[str]:
-        found: List[str] = []
-        # Normalise hyphens when checking
-        norm = lower.replace("-", " ")
-        for tag in DIETARY_TAGS:
-            norm_tag = tag.replace("-", " ")
-            if norm_tag in norm:
-                canonical = tag.replace(" ", "-")
-                if canonical not in found:
-                    found.append(canonical)
-        return found
+    def _extract_dietary_tags(self, text: str) -> List[str]:
+        tags: List[str] = []
+        for alias, canonical in DIETARY_TAG_ALIASES.items():
+            if re.search(rf"\b{re.escape(alias)}\b", text):
+                tags.append(canonical)
+        return list(dict.fromkeys(tags))
 
     def _extract_excluded_ingredients(self, text: str) -> List[str]:
-        """Extract excluded ingredients like 'no palm oil'."""
-        excluded: List[str] = []
-        if self._NO_PALM_OIL_PATTERN.search(text):
-            excluded.append("palm oil")
-        return excluded
+        exclusions: List[str] = []
+        lowered = text.lower()
+        for pattern, ingredient in EXCLUDED_INGREDIENT_PATTERNS.items():
+            if re.search(pattern, lowered, re.IGNORECASE):
+                exclusions.append(ingredient)
+        if self._ZERO_SUGAR_PATTERN.search(text):
+            exclusions.append("added sugar")
+        return list(dict.fromkeys(exclusions))
 
     def _extract_numeric_constraints(self, text: str) -> List[NutrientConstraint]:
         constraints: List[NutrientConstraint] = []
-        seen_ops: set = set()          # (nutrient, op) pairs already added
-        seen_directed: set = set()     # nutrients that have a directed constraint
+        directed_nutrients: set[str] = set()
+        directed_spans: List[Tuple[int, int]] = []
 
-        def _add_directed(nutrient: str, op: str, value: float, unit: str = "g") -> None:
-            key = (nutrient, op)
-            if key not in seen_ops:
-                seen_ops.add(key)
-                seen_directed.add(nutrient)
-                constraints.append(
-                    NutrientConstraint(nutrient=nutrient, operator=op, value=value, unit=unit)
-                )
+        for pattern, pattern_type in self._NUMERIC_PATTERNS:
+            for match in pattern.finditer(text):
+                if pattern_type in {"upper", "lower"}:
+                    amount = match.group(2)
+                    nutrient_term = match.group(4)
+                else:
+                    nutrient_term = match.group(1)
+                    amount = match.group(2)
+                constraint = self._build_constraint(nutrient_term, amount, pattern_type, text)
+                if constraint:
+                    constraints.append(constraint)
+                    directed_nutrients.add(constraint.nutrient)
+                    directed_spans.append(match.span())
 
-        def _add_bare(nutrient: str, op: str, value: float, unit: str = "g") -> None:
-            # Skip if a directed constraint already covers this nutrient
-            if nutrient in seen_directed:
-                return
-            key = (nutrient, op)
-            if key not in seen_ops:
-                seen_ops.add(key)
-                constraints.append(
-                    NutrientConstraint(nutrient=nutrient, operator=op, value=value, unit=unit)
-                )
-
-        for pattern, direction in self._NUMERIC_PATTERNS:
-            for m in pattern.finditer(text):
-                groups = [g for g in m.groups() if g is not None]
-                # Extract numeric value and nutrient name from groups
-                nums = [g for g in groups if re.match(r"^\d", g)]
-                words = [g for g in groups if re.match(r"[a-z]", g, re.I) and not re.match(r"^\d", g)]
-                if not nums or not words:
-                    continue
-                value = float(nums[0])
-                nutrient_word = next(
-                    (w for w in words if w.lower() in NUTRIENT_ALIASES), None
-                )
-                if nutrient_word is None:
-                    continue
-                field = NUTRIENT_ALIASES[nutrient_word.lower()]
-                unit = "kcal" if "kcal" in field else "g"
-                op = "<=" if direction in ("upper", "upper_rev") else ">="
-                _add_directed(field, op, value, unit)
-
-        # Bare numeric: "200 calories", "10g protein" – only when no directed constraint found
-        for m in self._BARE_NUMERIC.finditer(text):
-            value_s, unit_s, nutrient_word = m.group(1), m.group(2), m.group(3)
-            field = NUTRIENT_ALIASES.get(nutrient_word.lower())
-            if field is None:
+        for match in self._BARE_NUMERIC.finditer(text):
+            if any(start <= match.start() and match.end() <= end for start, end in directed_spans):
                 continue
-            unit = "kcal" if unit_s.lower().startswith("kcal") or "cal" in unit_s.lower() else "g"
-            # Direction: protein/fiber default to >= (more is better), others default to <=
-            direction = ">=" if field in ("proteins_100g", "fiber_100g") else "<="
-            _add_bare(field, direction, float(value_s), unit)
-
-        # Standalone calorie pattern: "350 calorie" without explicit nutrient keyword
-        for m in self._BARE_CALORIE.finditer(text):
-            # Skip if already have energy constraint
-            if any(c.nutrient == "energy-kcal_100g" for c in constraints):
+            amount = float(match.group(1))
+            unit = match.group(2).lower()
+            nutrient_term = match.group(3)
+            nutrient = NUTRIENT_ALIASES[nutrient_term.lower()]
+            if nutrient in directed_nutrients:
                 continue
-            value_s, unit_s = m.group(1), m.group(2)
-            # Standalone calories default to <= (ceiling/upper bound)
-            _add_bare("energy-kcal_100g", "<=", float(value_s), "kcal")
+            amount = self._normalize_numeric_value(amount, unit, nutrient)
+            operator = ">=" if nutrient in {"proteins_100g", "fiber_100g"} else "<="
+            constraints.append(
+                NutrientConstraint(
+                    nutrient=nutrient,
+                    operator=operator,
+                    value=amount,
+                    unit=NUTRIENT_UNITS.get(nutrient, "g"),
+                )
+            )
 
-        # Zero sugar pattern: "0 added sugar", "zero sugar", "no sugar"
+        for match in self._BARE_CALORIE.finditer(text):
+            amount = float(match.group(1))
+            constraints.append(
+                NutrientConstraint(
+                    nutrient="energy_kcal_100g",
+                    operator="<=",
+                    value=amount,
+                    unit="kcal",
+                )
+            )
+
         if self._ZERO_SUGAR_PATTERN.search(text):
-            # Skip if already have sugar constraint
-            if not any(c.nutrient == "sugars_100g" for c in constraints):
-                _add_directed("sugars_100g", "<=", 0.5, "g")  # Near-zero sugar
+            constraints.append(
+                NutrientConstraint(
+                    nutrient="sugars_100g",
+                    operator="<=",
+                    value=0.5,
+                    unit="g",
+                )
+            )
 
         return constraints
 
-    def _extract_qualitative_constraints(
-        self, lower: str, existing: List[NutrientConstraint]
-    ) -> List[NutrientConstraint]:
-        """Add qualitative bounds for 'high X' / 'low X' when no numeric bound exists."""
-        existing_fields = {c.nutrient for c in existing}
-        new_constraints: List[NutrientConstraint] = []
+    def _build_constraint(
+        self,
+        nutrient_term: str,
+        amount_text: str,
+        pattern_type: str,
+        raw_text: str,
+    ) -> Optional[NutrientConstraint]:
+        nutrient = NUTRIENT_ALIASES.get(nutrient_term.lower())
+        if nutrient is None:
+            return None
+        amount = self._normalize_numeric_value(float(amount_text), self._extract_unit_hint(raw_text), nutrient)
+        operator = "<=" if pattern_type.startswith("upper") else ">="
+        return NutrientConstraint(
+            nutrient=nutrient,
+            operator=operator,
+            value=amount,
+            unit=NUTRIENT_UNITS.get(nutrient, "g"),
+        )
 
-        for quality, mappings in QUALITATIVE_THRESHOLDS.items():
-            for kw, field in NUTRIENT_ALIASES.items():
-                phrase = f"{quality} {kw}"
-                if phrase in lower and field in mappings and field not in existing_fields:
-                    op, value = mappings[field]
-                    unit = "kcal" if "kcal" in field else "g"
-                    new_constraints.append(
+    def _extract_unit_hint(self, text: str) -> str:
+        unit_match = re.search(r"\b(mg|g|kcal|cal(?:ories)?)\b", text.lower())
+        return unit_match.group(1) if unit_match else "g"
+
+    def _normalize_numeric_value(self, value: float, unit: str, nutrient: str) -> float:
+        if unit == "mg":
+            return value / 1000.0
+        if unit.startswith("cal"):
+            return value
+        return value
+
+    def _extract_qualitative_constraints(
+        self,
+        text: str,
+        existing_constraints: List[NutrientConstraint],
+    ) -> List[NutrientConstraint]:
+        existing_nutrients = {constraint.nutrient for constraint in existing_constraints}
+        constraints: List[NutrientConstraint] = []
+
+        for descriptor, threshold_map in QUALITATIVE_THRESHOLDS.items():
+            for nutrient_term, nutrient in NUTRIENT_ALIASES.items():
+                if nutrient in existing_nutrients:
+                    continue
+                phrase = f"{descriptor} {nutrient_term}"
+                if re.search(rf"\b{re.escape(phrase)}\b", text):
+                    operator, value = threshold_map.get(nutrient, (None, None))
+                    if operator is None:
+                        continue
+                    constraints.append(
                         NutrientConstraint(
-                            nutrient=field, operator=op, value=value, unit=unit
+                            nutrient=nutrient,
+                            operator=operator,
+                            value=value,
+                            unit=NUTRIENT_UNITS.get(nutrient, "g"),
                         )
                     )
-                    existing_fields.add(field)
 
-        return new_constraints
+        if "low sodium diet" in text or "low salt diet" in text:
+            constraints.append(NutrientConstraint("sodium_100g", "<=", 0.12, "g"))
+
+        return constraints
+
+    def _extract_ranking_preferences(self, text: str) -> List[str]:
+        preferences: List[str] = []
+        for phrase, canonical in HEALTH_PREFERENCES.items():
+            if phrase in text:
+                preferences.append(canonical)
+        return list(dict.fromkeys(preferences))
+
+    def _extract_search_terms(self, text: str, query: FoodQuery) -> List[str]:
+        cleaned = text
+        if query.category:
+            for phrase in sorted(CATEGORY_KEYWORDS.keys(), key=len, reverse=True):
+                if CATEGORY_KEYWORDS[phrase] == query.category:
+                    cleaned = re.sub(rf"\b{re.escape(phrase)}\b", " ", cleaned)
+        for phrase in sorted(DIETARY_TAG_ALIASES.keys(), key=len, reverse=True):
+            cleaned = re.sub(rf"\b{re.escape(phrase)}\b", " ", cleaned)
+        for phrase in sorted(HEALTH_PREFERENCES.keys(), key=len, reverse=True):
+            cleaned = re.sub(rf"\b{re.escape(phrase)}\b", " ", cleaned)
+        for nutrient_term in sorted(NUTRIENT_ALIASES.keys(), key=len, reverse=True):
+            cleaned = re.sub(rf"\b{re.escape(nutrient_term)}\b", " ", cleaned)
+
+        # Exclusion phrases are filters and should not become positive-match keywords.
+        for ingredient in query.excluded_ingredients:
+            normalized = ingredient.strip().lower()
+            if not normalized:
+                continue
+            cleaned = re.sub(rf"\b{re.escape(normalized)}\b", " ", cleaned)
+            if " " in normalized:
+                hyphenated = normalized.replace(" ", "-")
+                cleaned = re.sub(rf"\b{re.escape(hyphenated)}\b", " ", cleaned)
+            for token in re.findall(r"[a-z]+", normalized):
+                cleaned = re.sub(rf"\b{re.escape(token)}\b", " ", cleaned)
+
+        tokens = re.findall(r"[a-z]+", cleaned)
+        terms: List[str] = []
+        for token in tokens:
+            if token in STRUCTURAL_STOPWORDS or token.isdigit():
+                continue
+            terms.append(token)
+
+        if query.comparison_product:
+            terms.extend(re.findall(r"[a-z]+", query.comparison_product.lower()))
+
+        return list(dict.fromkeys(terms))
+
+    def _dedupe_constraints(self, constraints: List[NutrientConstraint]) -> List[NutrientConstraint]:
+        deduped: Dict[Tuple[str, str], NutrientConstraint] = {}
+        for constraint in constraints:
+            key = (constraint.nutrient, constraint.operator)
+            current = deduped.get(key)
+            if current is None:
+                deduped[key] = constraint
+                continue
+            if constraint.operator.startswith("<"):
+                deduped[key] = constraint if constraint.value < current.value else current
+            else:
+                deduped[key] = constraint if constraint.value > current.value else current
+        return list(deduped.values())

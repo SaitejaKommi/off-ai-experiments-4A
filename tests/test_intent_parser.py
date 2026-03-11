@@ -25,7 +25,7 @@ class TestCategoryExtraction:
 
     def test_chocolate_category(self, parser):
         q = parser.parse("healthier alternative to Nutella chocolate spread")
-        assert q.category == "chocolates"
+        assert q.category == "spreads"
 
     def test_no_category(self, parser):
         q = parser.parse("low fat food")
@@ -34,6 +34,10 @@ class TestCategoryExtraction:
     def test_beverage_category(self, parser):
         q = parser.parse("sugar-free drink")
         assert q.category == "beverages"
+
+    def test_semantic_snack_phrase(self, parser):
+        q = parser.parse("Show me healthy snacks suitable for a low-sodium diet that are also vegan")
+        assert q.category == "snacks"
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +66,12 @@ class TestDietaryTags:
     def test_no_tags(self, parser):
         q = parser.parse("peanut butter")
         assert q.dietary_tags == []
+
+    def test_healthy_query_extracts_preferences(self, parser):
+        q = parser.parse("healthy vegan snacks for kids")
+        assert "vegan" in q.dietary_tags
+        assert "healthy" in q.ranking_preferences
+        assert "kids" in q.ranking_preferences
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +134,11 @@ class TestQualitativeConstraints:
         sodium_c = [c for c in q.nutrient_constraints if "sodium" in c.nutrient]
         assert len(sodium_c) >= 1
         assert sodium_c[0].operator == "<="
+
+    def test_low_sodium_diet_phrase(self, parser):
+        q = parser.parse("healthy snacks suitable for a low sodium diet")
+        sodium_c = [c for c in q.nutrient_constraints if c.nutrient == "sodium_100g"]
+        assert sodium_c
 
     def test_qualitative_does_not_duplicate_numeric(self, parser):
         """Qualitative 'high protein' should not add a second constraint when
@@ -215,3 +230,15 @@ class TestEdgeCases:
         q = parser.parse("HIGH PROTEIN VEGAN SNACK")
         assert "vegan" in q.dietary_tags
         assert q.category == "snacks"
+
+    def test_search_terms_preserve_specific_words(self, parser):
+        q = parser.parse("healthy vegan chocolate cereal")
+        assert "chocolate" in q.search_terms
+
+    def test_no_palm_oil_query_uses_exclusion_not_keywords(self, parser):
+        q = parser.parse("give a snack which has no palm oil")
+        assert q.category == "snacks"
+        assert "palm oil" in q.excluded_ingredients
+        assert "which" not in q.search_terms
+        assert "palm" not in q.search_terms
+        assert "oil" not in q.search_terms

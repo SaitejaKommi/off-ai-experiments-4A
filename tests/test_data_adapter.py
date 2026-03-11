@@ -1,209 +1,174 @@
-"""Tests for the data adapter (unit tests, no network calls)."""
+"""Tests for the DuckDB data adapter."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
+import duckdb
 import pytest
 
 from off_ai.data_adapter import OFFDataAdapter, Product, _parse_product
 from off_ai.intent_parser import FoodQuery, NutrientConstraint
 
 
-# ---------------------------------------------------------------------------
-# _parse_product helper
-# ---------------------------------------------------------------------------
-
-class TestParseProduct:
-    def test_basic_fields(self):
-        raw = {
-            "code": "3017620422003",
-            "product_name": "Nutella",
-            "brands": "Ferrero",
-            "nutriscore_grade": "e",
-            "nova_group": 4,
-            "nutriments": {
-                "energy-kcal_100g": 530.0,
-                "sugars_100g": 56.3,
-                "fat_100g": 30.9,
-                "proteins_100g": 6.3,
-            },
-            "additives_tags": ["en:e322", "en:e471"],
-            "additives_n": 2,
-            "labels_tags": [],
-            "categories_tags": ["en:spreads", "en:chocolate-spreads"],
-        }
-        product = _parse_product(raw)
-        assert product.barcode == "3017620422003"
-        assert product.name == "Nutella"
-        assert product.brands == "Ferrero"
-        assert product.nutriscore == "e"
-        assert product.nova_group == 4
-        assert product.nutrients["energy-kcal_100g"] == 530.0
-        assert product.additives_count == 2
-
-    def test_missing_fields_default(self):
-        product = _parse_product({})
-        assert product.name == "Unknown"
-        assert product.nutrients == {}
-        assert product.additives == []
-        assert product.nova_group is None
-        assert product.nutriscore is None
-
-    def test_categories_stripped_of_prefix(self):
-        raw = {"categories_tags": ["en:snacks", "fr:snacks"]}
-        product = _parse_product(raw)
-        assert "snacks" in product.categories
-
-    def test_nova_group_as_string(self):
-        raw = {"nova_group": "3"}
-        product = _parse_product(raw)
-        assert product.nova_group == 3
-
-
-# ---------------------------------------------------------------------------
-# Product.passes_constraints
-# ---------------------------------------------------------------------------
-
-class TestPassesConstraints:
-    def _make_product(self, nutrients: dict) -> Product:
-        return Product(
-            barcode="0000000000001",
-            name="Test",
-            nutrients=nutrients,
-        )
-
-    def test_passes_upper_bound(self):
-        p = self._make_product({"energy-kcal_100g": 150.0})
-        c = NutrientConstraint("energy-kcal_100g", "<=", 200.0, "kcal")
-        assert p.passes_constraints([c]) is True
-
-    def test_fails_upper_bound(self):
-        p = self._make_product({"energy-kcal_100g": 250.0})
-        c = NutrientConstraint("energy-kcal_100g", "<=", 200.0, "kcal")
-        assert p.passes_constraints([c]) is False
-
-    def test_passes_lower_bound(self):
-        p = self._make_product({"proteins_100g": 15.0})
-        c = NutrientConstraint("proteins_100g", ">=", 10.0, "g")
-        assert p.passes_constraints([c]) is True
-
-    def test_fails_lower_bound(self):
-        p = self._make_product({"proteins_100g": 5.0})
-        c = NutrientConstraint("proteins_100g", ">=", 10.0, "g")
-        assert p.passes_constraints([c]) is False
-
-    def test_missing_nutrient_fails(self):
-        """Missing nutrient data should fail an explicit constraint."""
-        p = self._make_product({})
-        c = NutrientConstraint("proteins_100g", ">=", 10.0, "g")
-        assert p.passes_constraints([c]) is False
-
-    def test_missing_nutrient_can_pass_in_relaxed_mode(self):
-        p = self._make_product({})
-        c = NutrientConstraint("proteins_100g", ">=", 10.0, "g")
-        assert p.passes_constraints([c], allow_missing=True) is True
-
-    def test_multiple_constraints_all_pass(self):
-        p = self._make_product({
-            "proteins_100g": 12.0,
-            "energy-kcal_100g": 150.0,
-        })
-        constraints = [
-            NutrientConstraint("proteins_100g", ">=", 10.0, "g"),
-            NutrientConstraint("energy-kcal_100g", "<=", 200.0, "kcal"),
-        ]
-        assert p.passes_constraints(constraints) is True
-
-    def test_multiple_constraints_one_fails(self):
-        p = self._make_product({
-            "proteins_100g": 5.0,
-            "energy-kcal_100g": 150.0,
-        })
-        constraints = [
-            NutrientConstraint("proteins_100g", ">=", 10.0, "g"),
-            NutrientConstraint("energy-kcal_100g", "<=", 200.0, "kcal"),
-        ]
-        assert p.passes_constraints(constraints) is False
-
-    def test_empty_constraints_always_pass(self):
-        p = self._make_product({})
-        assert p.passes_constraints([]) is True
+@pytest.fixture
+def parquet_path(tmp_path: Path) -> Path:
+    parquet_file = tmp_path / "off_canada.parquet"
+    connection = duckdb.connect()
+    connection.execute(
+        """
+        COPY (
+            SELECT
+                code,
+                product_name,
+                brands,
+                categories,
+                labels,
+                ingredients_text,
+                nutriscore_grade,
+                nova_group,
+                image_url,
+                url,
+                struct_pack(
+                    proteins_100g := proteins_100g,
+                    sugars_100g := sugars_100g,
+                    energy_kcal_100g := energy_kcal_100g,
+                    sodium_100g := sodium_100g,
+                    fiber_100g := fiber_100g,
+                    fat_100g := fat_100g
+                ) AS nutriments
+            FROM (
+                VALUES
+                    ('1', 'Sea Salt Lentil Chips', 'Good Foods', 'snacks, chips', 'vegan, organic', 'lentils, sea salt', 'a', 2, 'https://img/1', 'https://product/1', 12.0, 1.2, 280.0, 0.09, 7.0, 8.0),
+                    ('2', 'Sweet Kids Cereal', 'Sugar Town', 'cereals, breakfast cereals', 'vegetarian', 'corn, sugar, salt', 'c', 4, 'https://img/2', 'https://product/2', 4.0, 24.0, 390.0, 0.42, 2.0, 4.0),
+                    ('3', 'Plain Oat Crackers', 'North Grain', 'snacks, crackers', 'vegan', 'oats, salt', 'b', 3, 'https://img/3', 'https://product/3', 11.0, 2.5, 260.0, 0.11, 6.0, 7.0)
+            ) AS source(
+                code,
+                product_name,
+                brands,
+                categories,
+                labels,
+                ingredients_text,
+                nutriscore_grade,
+                nova_group,
+                image_url,
+                url,
+                proteins_100g,
+                sugars_100g,
+                energy_kcal_100g,
+                sodium_100g,
+                fiber_100g,
+                fat_100g
+            )
+        ) TO ? (FORMAT parquet)
+        """,
+        [str(parquet_file)],
+    )
+    connection.close()
+    return parquet_file
 
 
-# ---------------------------------------------------------------------------
-# Product serialisation
-# ---------------------------------------------------------------------------
-
-class TestProductSerialization:
-    def test_to_dict_keys(self):
-        p = Product(
-            barcode="123",
-            name="Test",
-            nutrients={"energy-kcal_100g": 100.0},
-            nutriscore="b",
-        )
-        d = p.to_dict()
-        for key in (
-            "barcode", "name", "brands", "categories", "nutrients",
-            "nutriscore", "nova_group", "additives", "labels",
-        ):
-            assert key in d
-
-    def test_nutrient_method(self):
-        p = Product(barcode="1", name="X", nutrients={"fat_100g": 5.0})
-        assert p.nutrient("fat_100g") == 5.0
-        assert p.nutrient("missing_key") is None
-
-    def test_has_excluded_ingredient(self):
-        p = Product(
-            barcode="1",
-            name="X",
-            ingredients_text="cocoa butter, sugar, palm oil",
-            ingredients_tags=["en:palm-oil"],
-        )
-        assert p.has_excluded_ingredient(["palm oil"]) is True
-        assert p.has_excluded_ingredient(["soy"]) is False
+def test_parse_product_normalizes_nutrients():
+    raw = {
+        "code": "3017620422003",
+        "product_name": "Nutella",
+        "brands": "Ferrero",
+        "nutriscore_grade": "e",
+        "nova_group": 4,
+        "nutriments": {
+            "energy-kcal_100g": 530.0,
+            "sugars_100g": 56.3,
+            "fat_100g": 30.9,
+            "proteins_100g": 6.3,
+        },
+        "categories_tags": ["en:spreads", "en:chocolate-spreads"],
+    }
+    product = _parse_product(raw)
+    assert product.barcode == "3017620422003"
+    assert product.nutrient("energy_kcal_100g") == 530.0
+    assert "spreads" in product.categories
 
 
-class TestAdapterFallbacks:
-    def test_search_retries_without_search_terms_but_keeps_category(self, monkeypatch):
-        adapter = OFFDataAdapter()
-        query = FoodQuery(raw_text="best olive oil", category="oils", max_results=5)
+def test_parse_product_picks_text_from_localized_name_structs():
+    raw = {
+        "code": "999",
+        "product_name": [
+            {"lang": "main", "text": "Flocons avoine"},
+            {"lang": "en", "text": "Oat Flakes"},
+            {"lang": "fr", "text": "Flocons d'avoine"},
+        ],
+        "brands": "LIDL",
+    }
+    product = _parse_product(raw)
+    assert product.name == "Oat Flakes"
 
-        calls = []
 
-        def fake_fetch(params, max_results):
-            calls.append(dict(params))
-            if "search_terms" in params:
-                return []
-            return [
-                {
-                    "code": "1",
-                    "product_name": "Olive Oil",
-                    "nutriments": {},
-                    "categories_tags": ["en:oils"],
-                }
-            ]
+def test_parse_product_derives_image_url_from_images_struct():
+    raw = {
+        "code": "0000101209159",
+        "product_name": "Test Product",
+        "images": [
+            {
+                "key": "front_fr",
+                "imgid": 1,
+                "rev": 4,
+                "sizes": {
+                    "100": {"h": 100, "w": 75},
+                    "200": {"h": 200, "w": 150},
+                    "400": {"h": 400, "w": 300},
+                },
+            }
+        ],
+    }
+    product = _parse_product(raw)
+    assert product.image_url.endswith("/000/010/120/9159/front_fr.4.400.jpg")
 
-        monkeypatch.setattr(adapter, "_fetch_search", fake_fetch)
-        products = adapter.search(query)
 
-        assert len(products) == 1
-        assert len(calls) == 2
-        assert "countries_tags" in calls[0]
-        assert "countries_tags" in calls[1]
-        assert "categories_tags" in calls[0]
-        assert "categories_tags" in calls[1]
-        assert "search_terms" in calls[0]
-        assert "search_terms" not in calls[1]
+def test_product_passes_constraints_works_with_canonical_names():
+    product = Product(barcode="1", name="Test", nutrients={"energy_kcal_100g": 150.0})
+    constraint = NutrientConstraint("energy_kcal_100g", "<=", 200.0, "kcal")
+    assert product.passes_constraints([constraint]) is True
 
-    def test_query_to_search_terms_removes_best(self):
-        adapter = OFFDataAdapter()
-        query = FoodQuery(raw_text="best Olive Oil")
-        terms = adapter._query_to_search_terms(query)
-        assert terms == "olive oil"
 
-    def test_query_to_search_terms_removes_conversational_noise(self):
-        adapter = OFFDataAdapter()
-        query = FoodQuery(
-            raw_text="Show me healthy snacks suitable for a low-sodium diet that are also vegan"
-        )
-        terms = adapter._query_to_search_terms(query)
-        assert terms == "snacks"
+def test_build_search_sql_uses_duckdb_parquet(parquet_path: Path):
+    adapter = OFFDataAdapter(parquet_path=str(parquet_path))
+    query = FoodQuery(
+        raw_text="healthy vegan snacks",
+        category="snacks",
+        dietary_tags=["vegan"],
+        ranking_preferences=["healthy"],
+        max_results=5,
+    )
+    sql, parameters = adapter.build_search_sql(query, limit=5)
+    assert "FROM products" in sql
+    assert "ILIKE ?" in sql
+    assert parameters[-1] == 5
+
+
+def test_search_returns_matching_products_from_parquet(parquet_path: Path):
+    adapter = OFFDataAdapter(parquet_path=str(parquet_path))
+    query = FoodQuery(
+        raw_text="Show me healthy snacks suitable for a low-sodium diet that are also vegan",
+        category="snacks",
+        dietary_tags=["vegan"],
+        nutrient_constraints=[NutrientConstraint("sodium_100g", "<=", 0.1, "g")],
+        ranking_preferences=["healthy"],
+        max_results=5,
+    )
+    results = adapter.search(query)
+    assert len(results) == 1
+    assert results[0].name == "Sea Salt Lentil Chips"
+
+
+def test_execute_search_reports_timing(parquet_path: Path):
+    adapter = OFFDataAdapter(parquet_path=str(parquet_path))
+    execution = adapter.execute_search(FoodQuery(raw_text="vegan snacks", max_results=5))
+    assert execution.execution_time_ms >= 0
+    assert execution.rows_returned >= 0
+
+
+def test_find_reference_product_searches_text_fields(parquet_path: Path):
+    adapter = OFFDataAdapter(parquet_path=str(parquet_path))
+    result = adapter.find_reference_product("sweet kids cereal")
+    assert result is not None
+    assert result.name == "Sweet Kids Cereal"

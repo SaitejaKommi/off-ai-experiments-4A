@@ -1,10 +1,4 @@
-"""
-query_preprocessor.py – Lightweight AI-style query preprocessing
-
-Stages:
-1) language detection (EN/FR)
-2) normalization to canonical tokens used by IntentParser
-"""
+"""Lightweight language detection and EN/FR normalization."""
 
 from __future__ import annotations
 
@@ -18,7 +12,7 @@ _FR_STRONG_HINTS = {
     "sans", "avec", "moins", "sucre", "graisse", "gras", "proteine",
     "proteines", "vegetalien", "vegetarien", "huile", "palme", "chocolat",
     "faible", "riche", "biologique", "ajoute", "ajoutee", "ajoutes",
-    "cereale", "cereales",
+    "cereale", "cereales", "sodium", "sel", "vegetalien", "enfants",
 }
 
 
@@ -43,6 +37,10 @@ class QueryPreprocessor:
         "cereale": "cereal",
         "muesli": "muesli",
         "chocolat": "chocolate",
+        "collation": "snack",
+        "collations": "snacks",
+        "biscuit": "cracker",
+        "biscuits": "crackers",
         
         # Palm oil
         "huile de palme": "palm oil",
@@ -66,6 +64,16 @@ class QueryPreprocessor:
         # Low sugar variants (singular & plural)
         "faibles en sucre": "low sugar",
         "faible en sucre": "low sugar",
+        "pauvre en sucre": "low sugar",
+
+        # Low sodium variants
+        "faible en sodium": "low sodium",
+        "faibles en sodium": "low sodium",
+        "pauvre en sodium": "low sodium",
+        "pauvres en sodium": "low sodium",
+        "faible en sel": "low salt",
+        "faibles en sel": "low salt",
+        "regime pauvre en sodium": "low sodium diet",
         
         # High protein variants (singular & plural)
         "riches en proteines": "high protein",
@@ -83,11 +91,14 @@ class QueryPreprocessor:
         "vegetalien": "vegan",
         "vegetalienne": "vegan",
         "vegetaliens": "vegan",
+        "vegetaliennes": "vegan",
         "vegetarien": "vegetarian",
         "vegetarienne": "vegetarian",
         "vegetariens": "vegetarian",
         "biologique": "organic",
         "biologiques": "organic",
+        "pour enfants": "for kids",
+        "pour enfant": "for kids",
     }
 
     _TYPO_REPLACEMENTS: Dict[str, str] = {
@@ -132,6 +143,7 @@ class QueryPreprocessor:
             # Numeric French patterns
             out = re.sub(r"\bmoins de\b", "under", out)
             out = re.sub(r"\bau moins\b", "at least", out)
+            out = re.sub(r"\bplus de\b", "over", out)
 
         # Canonical punctuation spacing
         out = out.replace(" ,", ",")
