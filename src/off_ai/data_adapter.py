@@ -7,6 +7,7 @@ import os
 import re
 import time
 import ast
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -74,8 +75,8 @@ def _quote_ident(identifier: str) -> str:
 
 
 DEFAULT_PARQUET_CANDIDATES = [
-    "src/off_ai/food.parquet",
     "off_dev.parquet",
+    "src/off_ai/food.parquet",
 ]
 
 
@@ -318,7 +319,27 @@ def _normalize_text_value(value: Any, default: str = "") -> str:
     return default
 
 
-def _normalize_product_url(raw_url: Any, barcode: str) -> str:
+def _slugify_product_name(name: str) -> str:
+    if not name:
+        return ""
+    normalized = unicodedata.normalize("NFKD", name)
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    tokens = re.findall(r"[a-z0-9]+", ascii_text.lower())
+    if not tokens:
+        return ""
+    return "-".join(tokens[:16])
+
+
+def _canonical_canada_product_url(barcode: str, product_name: str = "") -> str:
+    slug = _slugify_product_name(product_name)
+    if barcode and slug:
+        return f"{CANADA_OFF_BASE_URL}/product/{barcode}/{slug}"
+    if barcode:
+        return f"{CANADA_OFF_BASE_URL}/product/{barcode}"
+    return ""
+
+
+def _normalize_product_url(raw_url: Any, barcode: str, product_name: str = "") -> str:
     normalized_url = _normalize_text_value(raw_url, default="")
 
     if normalized_url:
@@ -326,11 +347,11 @@ def _normalize_product_url(raw_url: Any, barcode: str) -> str:
         if parsed.netloc.endswith("openfoodfacts.org"):
             path = parsed.path or (f"/product/{barcode}" if barcode else "")
             return urlunsplit(("https", "ca.openfoodfacts.org", path, parsed.query, parsed.fragment))
-        return normalized_url
+        # Some OFF exports include merchant or malformed links in `url/link`.
+        # Keep click-through stable by pointing to canonical Canada OFF pages.
+        return _canonical_canada_product_url(barcode, product_name)
 
-    if barcode:
-        return f"{CANADA_OFF_BASE_URL}/product/{barcode}"
-    return ""
+    return _canonical_canada_product_url(barcode, product_name)
 
 
 def _barcode_to_off_path(barcode: str) -> str:
@@ -423,12 +444,13 @@ def _parse_product(raw: Dict[str, Any]) -> Product:
     additives = [entry.upper().replace("EN:", "") for entry in additives_raw]
 
     barcode = str(raw.get("code") or raw.get("barcode") or "")
-    url = _normalize_product_url(raw.get("url") or raw.get("product_url"), barcode)
+    product_name = _normalize_text_value(raw.get("product_name") or raw.get("name"), default="Unknown")
+    url = _normalize_product_url(raw.get("url") or raw.get("product_url"), barcode, product_name)
     image_url = _derive_image_url(raw, barcode)
 
     return Product(
         barcode=barcode,
-        name=_normalize_text_value(raw.get("product_name") or raw.get("name"), default="Unknown"),
+        name=product_name,
         brands=_normalize_text_value(raw.get("brands"), default=""),
         categories=categories,
         nutrients=nutrients,
