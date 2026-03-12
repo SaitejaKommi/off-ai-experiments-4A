@@ -144,7 +144,19 @@ def test_parse_product_defaults_missing_off_url_to_canada_site():
 
     product = _parse_product(raw)
 
-    assert product.product_url == "https://ca.openfoodfacts.org/product/3017620422003"
+    assert product.product_url == "https://ca.openfoodfacts.org/product/3017620422003/nutella"
+
+
+def test_parse_product_replaces_external_url_with_canada_off_product_page():
+    raw = {
+        "code": "0068826176033",
+        "product_name": "Tortilla chips",
+        "url": "https://www.presidentschoice.ca/product/pc-kettle-style-blue-corn-tortilla-chips-seasoned-with-sea-salt/21003407_EA",
+    }
+
+    product = _parse_product(raw)
+
+    assert product.product_url == "https://ca.openfoodfacts.org/product/0068826176033/tortilla-chips"
 
 
 def test_product_passes_constraints_works_with_canonical_names():
