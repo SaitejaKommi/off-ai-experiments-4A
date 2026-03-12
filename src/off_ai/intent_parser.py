@@ -472,7 +472,12 @@ class IntentParser:
     )
 
     _ZERO_SUGAR_PATTERN = re.compile(
-        r"(?:0|zero|no|none)\s*(?:added\s+)?sugar",
+        r"(?:0|zero|no|none)\s+sugar",
+        re.IGNORECASE,
+    )
+
+    _NO_ADDED_SUGAR_PATTERN = re.compile(
+        r"(?:0|zero|no|none|without|free\s+from)\s+added\s+sugar",
         re.IGNORECASE,
     )
 
@@ -548,7 +553,7 @@ class IntentParser:
         for pattern, ingredient in EXCLUDED_INGREDIENT_PATTERNS.items():
             if re.search(pattern, lowered, re.IGNORECASE):
                 exclusions.append(ingredient)
-        if self._ZERO_SUGAR_PATTERN.search(text):
+        if self._NO_ADDED_SUGAR_PATTERN.search(text):
             exclusions.append("added sugar")
         return list(dict.fromkeys(exclusions))
 
