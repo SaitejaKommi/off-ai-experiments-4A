@@ -199,6 +199,35 @@ function normalizeDisplayText(value, fallback = "") {
     return String(value);
 }
 
+function canonicalizeCanadaProductUrl(product) {
+    const barcode = normalizeDisplayText(product.barcode, "").trim();
+    const rawUrl = normalizeDisplayText(product.url, "").trim();
+
+    // Use Canada search endpoint by barcode to keep navigation within the
+    // Canada OFF site and avoid world-domain redirects on direct product URLs.
+    if (barcode) {
+        return `https://ca.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(barcode)}&search_simple=1&action=process`;
+    }
+
+    if (rawUrl) {
+        try {
+            const parsed = new URL(rawUrl);
+            if (parsed.hostname.endsWith("openfoodfacts.org")) {
+                const path = parsed.pathname && parsed.pathname !== "/"
+                    ? parsed.pathname
+                    : "";
+                if (path) {
+                    return `https://ca.openfoodfacts.org${path}`;
+                }
+            }
+        } catch {
+            // Fall back to barcode-based URL below.
+        }
+    }
+
+    return "";
+}
+
 // Create a single product card
 function createProductCard(product) {
     const card = document.createElement("div");
@@ -209,11 +238,12 @@ function createProductCard(product) {
     const categoryValue = normalizeDisplayText(product.category, "");
     const summaryValue = normalizeDisplayText(product.summary, "See details");
     const imageValue = normalizeDisplayText(product.image, "");
+    const productUrl = canonicalizeCanadaProductUrl(product);
     
     // Click handler to open product page
     card.addEventListener("click", () => {
-        if (product.url) {
-            chrome.tabs.create({ url: product.url });
+        if (productUrl) {
+            chrome.tabs.create({ url: productUrl });
         }
     });
 
