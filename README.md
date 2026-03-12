@@ -35,7 +35,12 @@ This project now includes:
 - Open Food Facts parquet dataset available locally
 
 Recommended dataset path:
-- `src/off_ai/food.parquet`
+- `off_dev.parquet`
+
+Recommended development dataset:
+- Canada-only subset
+- ~50,000 rows
+- lean schema with only search-relevant columns
 
 ## Quick Start (Beginner Friendly)
 
@@ -70,8 +75,36 @@ pip install -r requirements.txt
 
 ### 4. Add dataset
 
-Place parquet file at:
-- `src/off_ai/food.parquet`
+Create the curated development dataset:
+
+```powershell
+python download_dataset.py
+```
+
+This generates `off_dev.parquet` with:
+- only Canadian products
+- 50,000 rows by default
+- a reduced set of columns used by the API/search pipeline
+
+If you already have the full OFF parquet locally and want DuckDB to curate it directly:
+
+```powershell
+python download_dataset.py --method duckdb --source-parquet off_products.parquet
+```
+
+The API prefers `off_dev.parquet` automatically. To override the dataset path:
+
+```powershell
+$env:OFF_PARQUET_PATH = "path\to\your.parquet"
+```
+
+Fallback when offline:
+
+```powershell
+python create_dev_dataset.py
+```
+
+That creates a small synthetic `off_dev.parquet` for local testing only.
 
 If dataset is missing, API health will report `dataset_available: false`.
 
