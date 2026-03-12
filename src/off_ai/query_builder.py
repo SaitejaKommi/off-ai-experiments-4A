@@ -53,8 +53,8 @@ class QueryBuilder:
             where_clauses.append(f"NULLIF(TRIM(CAST({product_name_expr} AS VARCHAR)), '') IS NOT NULL")
 
         if countries_text is not None:
-            where_clauses.append(f"ARRAY_TO_STRING({countries_text}, ',') ILIKE ?")
-            parameters.append("%canada%")
+            where_clauses.append(f"CAST({countries_text} AS VARCHAR) ILIKE ?")
+            parameters.append("%en:canada%")
 
         if constraints.category_tag and category_text:
             where_clauses.append(f"{category_text} ILIKE ?")
