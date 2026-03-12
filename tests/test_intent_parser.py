@@ -242,3 +242,21 @@ class TestEdgeCases:
         assert "which" not in q.search_terms
         assert "palm" not in q.search_terms
         assert "oil" not in q.search_terms
+
+    def test_no_added_sugar_does_not_force_zero_total_sugar(self, parser):
+        q = parser.parse("low sugar snacks with no added sugar")
+        assert "added sugar" in q.excluded_ingredients
+        sugar_constraints = [
+            c for c in q.nutrient_constraints if c.nutrient == "sugars_100g"
+        ]
+        assert sugar_constraints
+        # Comes from qualitative "low sugar", not strict zero-sugar shortcut.
+        assert all(c.value >= 5.0 for c in sugar_constraints)
+
+    def test_zero_sugar_phrase_keeps_strict_sugar_cap(self, parser):
+        q = parser.parse("zero sugar drink")
+        sugar_constraints = [
+            c for c in q.nutrient_constraints if c.nutrient == "sugars_100g"
+        ]
+        assert sugar_constraints
+        assert any(c.value <= 0.5 for c in sugar_constraints)
