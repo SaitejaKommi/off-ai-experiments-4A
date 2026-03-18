@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import time
 import textwrap
 from dataclasses import dataclass, field
@@ -15,7 +16,10 @@ from .intent_parser import FoodQuery, IntentParser, NutrientConstraint
 from .post_processor import RankingPostProcessor
 from .query_preprocessor import QueryPreprocessor
 from .recommendation_engine import Recommendation, RecommendationEngine
+from .semantic_reranker import SemanticReranker
 from .taxonomy_mapper import TaxonomyMapper
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -149,6 +153,7 @@ class FoodIntelligencePipeline:
         self._adapter = adapter or OFFDataAdapter()
         self._insight_engine = InsightEngine()
         self._rec_engine = RecommendationEngine()
+        self._semantic_reranker = SemanticReranker()
         self.max_results = max_results
 
     def run(self, user_query: str) -> PipelineResult:
@@ -158,11 +163,29 @@ class FoodIntelligencePipeline:
         preprocess_ms = (time.perf_counter() - preprocess_start) * 1000.0
         parse_start = time.perf_counter()
         query = self._parser.parse(pre.normalized_text)
+        selected_normalized = pre.normalized_text
+        if pre.language == "fr":
+            deterministic_fr = self._preprocessor.normalize(user_query.lower().strip(), "fr")
+            deterministic_query = self._parser.parse(deterministic_fr)
+            query, used_deterministic = self._merge_parsed_queries(query, deterministic_query)
+            if used_deterministic:
+                selected_normalized = deterministic_fr
         parse_ms = (time.perf_counter() - parse_start) * 1000.0
         query.raw_text = user_query
         query.detected_language = pre.language
-        query.normalized_text = pre.normalized_text
+        query.normalized_text = selected_normalized
         query.max_results = self.max_results
+
+        logger.debug(
+            "PIPELINE | lang=%s | norm=%r | category=%s | dietary=%s | nutrients=%r",
+            pre.language,
+            pre.normalized_text,
+            query.category,
+            query.dietary_tags,
+            [(c.nutrient, c.operator, c.value) for c in query.nutrient_constraints],
+        )
+        logger.debug("FOOD_QUERY: %s", query.to_dict())
+
         result = PipelineResult(query=query)
         if query.comparison_product:
             result = self._run_comparison(query, result)
@@ -204,13 +227,62 @@ class FoodIntelligencePipeline:
             return 0, query.nutrient_constraints[0]
         return None
 
+    def _query_signal_score(self, query: FoodQuery) -> int:
+        return (
+            (2 if query.category else 0)
+            + (len(query.dietary_tags) * 2)
+            + (len(query.nutrient_constraints) * 3)
+            + len(query.ranking_preferences)
+        )
+
+    def _canonicalize_dietary_tags(self, tags: List[str]) -> List[str]:
+        deduped = list(dict.fromkeys(tags))
+        # Vegan is stricter and implies vegetarian; keep only vegan when both are present.
+        if "vegan" in deduped and "vegetarian" in deduped:
+            deduped = [tag for tag in deduped if tag != "vegetarian"]
+        return deduped
+
+    def _merge_parsed_queries(self, primary: FoodQuery, secondary: FoodQuery) -> Tuple[FoodQuery, bool]:
+        merged = copy.deepcopy(primary)
+
+        if not merged.category and secondary.category:
+            merged.category = secondary.category
+
+        merged.dietary_tags = self._canonicalize_dietary_tags(
+            list(primary.dietary_tags) + list(secondary.dietary_tags)
+        )
+        merged.ranking_preferences = list(
+            dict.fromkeys(list(primary.ranking_preferences) + list(secondary.ranking_preferences))
+        )
+
+        strictest: dict[Tuple[str, str], NutrientConstraint] = {}
+        for constraint in list(primary.nutrient_constraints) + list(secondary.nutrient_constraints):
+            key = (constraint.nutrient, constraint.operator)
+            current = strictest.get(key)
+            if current is None:
+                strictest[key] = copy.deepcopy(constraint)
+                continue
+            if constraint.operator.startswith("<"):
+                if constraint.value < current.value:
+                    strictest[key] = copy.deepcopy(constraint)
+            elif constraint.operator.startswith(">"):
+                if constraint.value > current.value:
+                    strictest[key] = copy.deepcopy(constraint)
+        merged.nutrient_constraints = list(strictest.values())
+
+        merged.search_terms = list(dict.fromkeys(list(primary.search_terms) + list(secondary.search_terms)))
+        merged.comparison_product = primary.comparison_product or secondary.comparison_product
+
+        used_secondary_as_primary = self._query_signal_score(secondary) > self._query_signal_score(primary)
+        return merged, used_secondary_as_primary
+
     def _run_search(self, query: FoodQuery, result: PipelineResult) -> PipelineResult:
         extracted = self._constraint_extractor.extract(query)
         mapped_constraints = self._taxonomy_mapper.map_constraints(extracted)
         result.interpreted_query = mapped_constraints.interpreted_query()
         result.applied_filters = mapped_constraints.applied_filters()
 
-        execution = self._adapter.execute_constraints(mapped_constraints)
+        execution = self._adapter.execute_constraints(mapped_constraints, candidate_limit=50)
         products = execution.products
         relaxation_log: List[str] = []
         current_query = copy.deepcopy(query)
@@ -218,49 +290,23 @@ class FoodIntelligencePipeline:
         current_execution = execution
 
         # Step 1: initial query run is done above.
-        # Step 2: if empty, relax nutrients and rerun.
+        # Step 2: if empty, relax nutrients gradually (numeric-only safety mode).
         if not products and current_constraints.nutrient_constraints:
-            current_constraints, nutrient_changes = self._post_processor.relax_nutrients(current_constraints)
-            relaxation_log.extend(nutrient_changes)
-            current_execution = self._adapter.execute_constraints(current_constraints)
-            products = current_execution.products
+            for _relax_pass in range(2):
+                current_constraints, nutrient_changes = self._post_processor.relax_nutrients(current_constraints)
+                relaxation_log.extend(nutrient_changes)
+                current_execution = self._adapter.execute_constraints(current_constraints, candidate_limit=50)
+                products = current_execution.products
+                logger.debug(
+                    "RELAX pass %d | changes=%s | results=%d",
+                    _relax_pass + 1, nutrient_changes, len(products),
+                )
+                if products:
+                    break
 
-        # Step 3: if still empty, first remove keyword constraints but keep category.
-        if not products and current_constraints.keywords and (current_constraints.category or current_constraints.category_tag):
-            removed_keywords = list(current_constraints.keywords)
-            current_constraints = current_constraints.clone()
-            current_constraints.keywords = []
-            if removed_keywords:
-                relaxation_log.append(f"keywords removed to broaden in-category match: {', '.join(removed_keywords)}")
-            current_execution = self._adapter.execute_constraints(current_constraints)
-            products = current_execution.products
-
-        # Step 4: if still empty and category exists, relax dietary tags but keep category.
-        if not products and current_constraints.dietary_tags and (current_constraints.category or current_constraints.category_tag):
-            removed_tags = list(current_constraints.dietary_tags)
-            current_constraints = current_constraints.clone()
-            current_constraints.dietary_tags = []
-            relaxation_log.append(
-                f"dietary tags removed to preserve category match: {', '.join(removed_tags)}"
-            )
-            current_execution = self._adapter.execute_constraints(current_constraints)
-            products = current_execution.products
-
-        # Step 5: if still empty, remove category and rerun.
-        if not products and (current_constraints.category or current_constraints.category_tag):
-            current_constraints, category_changes = self._post_processor.remove_category(current_constraints)
-            relaxation_log.extend(category_changes)
-            current_execution = self._adapter.execute_constraints(current_constraints)
-            products = current_execution.products
-
-        # Step 6: final fallback for sparse nutrient coverage.
-        # Important: do not allow missing nutrients when the user explicitly constrained nutrients,
-        # otherwise unrelated items (e.g., water for high-protein queries) can leak in.
-        has_explicit_nutrient_constraints = bool(mapped_constraints.nutrient_constraints)
-        if not products and relaxation_log and not has_explicit_nutrient_constraints:
-            relaxation_log.append("allowing missing nutrient values")
-            current_execution = self._adapter.execute_constraints(current_constraints, allow_missing_nutrients=True)
-            products = current_execution.products
+        # Strict mode: preserve semantic intent exactly. No keyword/category/tag dropping.
+        if not products and (current_constraints.keywords or current_constraints.dietary_tags or current_constraints.category):
+            relaxation_log.append("semantic constraints preserved (no keyword/tag/category removal)")
 
         # Keep ranking/explanations aligned with the final executed constraints.
         current_query.category = current_constraints.category
@@ -274,6 +320,8 @@ class FoodIntelligencePipeline:
 
         result.generated_sql = current_execution.sql
         result.relaxation_log = relaxation_log
+        logger.debug("SQL: %.600s", current_execution.sql)
+        logger.debug("RELAX_LOG: %s", relaxation_log)
         result.performance.update(
             {
                 "duckdb_execution_ms": round(current_execution.execution_time_ms, 3),
@@ -281,7 +329,8 @@ class FoodIntelligencePipeline:
             }
         )
         ranking_start = time.perf_counter()
-        result.results = self._rank_results(products[: self.max_results], current_query)
+        ranked_results = self._rank_results(products, current_query)
+        result.results = ranked_results[: self.max_results]
         result.performance["ranking_ms"] = round((time.perf_counter() - ranking_start) * 1000.0, 3)
         result.ranking_rationale = self._post_processor.ranking_rationale(
             has_category=bool(current_constraints.category),
@@ -293,41 +342,30 @@ class FoodIntelligencePipeline:
         return result
 
     def _rank_results(self, products: List[Product], query: FoodQuery) -> List[RankedProduct]:
+        semantic_scores = self._semantic_reranker.score_products(query.raw_text or query.normalized_text or "", products)
         ranked: List[RankedProduct] = []
         for product in products:
             insight = self._insight_engine.analyze(product)
-            score = self._score_product(product, query, insight)
+            score = self._score_product(product, query, insight, semantic_scores.get(product.barcode, 0.0))
             explanation = self._build_explanation(product, query, insight)
             ranked.append(RankedProduct(product=product, insight=insight, score=score, explanation=explanation))
         ranked.sort(key=lambda item: item.score, reverse=True)
+        for _i, _item in enumerate(ranked[:5]):
+            logger.debug(
+                "RANK #%d | score=%.2f | semantic=%.3f | %s | nutrients=%s",
+                _i + 1,
+                _item.score,
+                semantic_scores.get(_item.product.barcode, 0.0),
+                _item.product.name,
+                {c.nutrient.replace("_100g", ""): _item.product.nutrient(c.nutrient) for c in query.nutrient_constraints},
+            )
         return ranked
 
-    def _score_product(self, product: Product, query: FoodQuery, insight: ProductInsight) -> float:
-        proteins = product.nutrient("proteins_100g") or 0.0
-        sugars = product.nutrient("sugars_100g") or 0.0
-        sodium = product.nutrient("sodium_100g") or 0.0
-        calories = product.nutrient("energy_kcal_100g") or 0.0
+    def _score_product(self, product: Product, query: FoodQuery, insight: ProductInsight, semantic_similarity: float) -> float:
+        score = self._rec_engine._composite_score(product) * 8
 
-        protein_weight = 2.0
-        sugar_weight = 1.0
-        sodium_weight = 1.5
-        calorie_weight = 0.1
-
-        if "kids" in query.ranking_preferences:
-            sugar_weight = 1.6
-            calorie_weight = 0.15
-        if "healthy" in query.ranking_preferences:
-            protein_weight = 2.2
-            sodium_weight = 1.8
-
-        nutrient_score = (
-            (protein_weight * proteins)
-            - (sugar_weight * sugars)
-            - (sodium_weight * sodium)
-            - (calorie_weight * calories)
-        )
-
-        score = nutrient_score + (self._rec_engine._composite_score(product) * 8)
+        # Semantic similarity from embedding/lexical reranker in [0, 1]
+        score += semantic_similarity * 40.0
 
         # Always reward better Nutri-Score so results are ordered A→B→C→D→E
         _NUTRISCORE_BONUS = {"a": 15, "b": 10, "c": 5, "d": 2, "e": 0}
@@ -335,32 +373,143 @@ class FoodIntelligencePipeline:
             score += _NUTRISCORE_BONUS.get(product.nutriscore.lower(), 0)
 
         if query.category and any(query.category in category.lower() for category in product.categories):
-            score += 6
+            score += 8
 
         for tag in query.dietary_tags:
             if product.has_label(tag):
-                score += 5
+                score += 6
 
         for constraint in query.nutrient_constraints:
-            if self._matches_constraint(product, constraint):
-                score += 4
+            value = product.nutrient(constraint.nutrient)
+            if value is None or not self._matches_constraint(product, constraint):
+                continue
+            score += 5
+            score += self._constraint_headroom_bonus(value, constraint)
+
+        # Penalty for products that violate any stated nutrient constraint.
+        # This down-ranks items that slipped through a relaxed SQL filter but
+        # still violate the user's original intent.
+        for constraint in query.nutrient_constraints:
+            value = product.nutrient(constraint.nutrient)
+            if value is not None and not self._matches_constraint(product, constraint):
+                score -= 15.0
+
+        # Sugar penalty: penalise high-sugar products unless category is confectionery.
+        _sweet_cats = {"candies", "chocolates", "cookies"}
+        if not any(sc in " ".join(product.categories).lower() for sc in _sweet_cats):
+            sugars = product.nutrient("sugars_100g")
+            if sugars is not None and sugars > 15.0:
+                score -= min(10.0, (sugars - 15.0) * 0.4)
+
+        # Calorie penalty: for queries with an explicit upper-calorie limit,
+        # penalise products that exceed that limit (after relaxation they may pass SQL).
+        _calorie_limits = [
+            c.value for c in query.nutrient_constraints
+            if c.nutrient == "energy_kcal_100g" and c.operator in ("<", "<=")
+        ]
+        if _calorie_limits:
+            calories = product.nutrient("energy_kcal_100g")
+            _limit = min(_calorie_limits)
+            if calories is not None and calories > _limit:
+                score -= min(20.0, (calories - _limit) * 0.05)
 
         if "healthy" in query.ranking_preferences:
             score += {"Excellent": 10, "Good": 7, "Moderate": 3, "Risky": 0}.get(
                 insight.health_classification,
                 0,
             )
+            score += self._healthy_preference_bonus(product)
 
         if "kids" in query.ranking_preferences:
             sugars = product.nutrient("sugars_100g")
             if sugars is not None:
-                score += max(0.0, 8.0 - sugars)
+                score += self._bounded_lower_is_better_bonus(sugars, good_threshold=3.0, cutoff_threshold=15.0, max_bonus=8.0)
 
         for term in query.search_terms:
             if self._term_matches_product(term, product):
-                score += 2
+                score += 0.5
 
         return score
+
+    def _constraint_headroom_bonus(self, value: float, constraint: NutrientConstraint) -> float:
+        baseline = max(abs(constraint.value), 1.0)
+        if constraint.operator in ("<", "<="):
+            margin = max(0.0, constraint.value - value)
+        elif constraint.operator in (">", ">="):
+            margin = max(0.0, value - constraint.value)
+        else:
+            return 0.0
+        return min(2.5, (margin / baseline) * 2.5)
+
+    def _healthy_preference_bonus(self, product: Product) -> float:
+        bonus = self._rec_engine._nutrient_score(product) * 3.0
+        bonus += self._bounded_lower_is_better_bonus(
+            product.nutrient("sodium_100g"),
+            good_threshold=0.12,
+            cutoff_threshold=0.6,
+            max_bonus=3.0,
+        )
+        bonus += self._bounded_lower_is_better_bonus(
+            product.nutrient("sugars_100g"),
+            good_threshold=5.0,
+            cutoff_threshold=22.5,
+            max_bonus=2.5,
+        )
+        bonus += self._bounded_lower_is_better_bonus(
+            product.nutrient("energy_kcal_100g"),
+            good_threshold=250.0,
+            cutoff_threshold=450.0,
+            max_bonus=1.5,
+        )
+        bonus += self._bounded_higher_is_better_bonus(
+            product.nutrient("proteins_100g"),
+            minimum_threshold=5.0,
+            target_threshold=15.0,
+            max_bonus=2.5,
+        )
+        bonus += self._bounded_higher_is_better_bonus(
+            product.nutrient("fiber_100g"),
+            minimum_threshold=3.0,
+            target_threshold=8.0,
+            max_bonus=2.0,
+        )
+        return bonus
+
+    def _bounded_lower_is_better_bonus(
+        self,
+        value: Optional[float],
+        good_threshold: float,
+        cutoff_threshold: float,
+        max_bonus: float,
+    ) -> float:
+        if value is None:
+            return 0.0
+        if value <= good_threshold:
+            return max_bonus
+        if value >= cutoff_threshold:
+            return 0.0
+        span = cutoff_threshold - good_threshold
+        if span <= 0:
+            return 0.0
+        return max_bonus * ((cutoff_threshold - value) / span)
+
+    def _bounded_higher_is_better_bonus(
+        self,
+        value: Optional[float],
+        minimum_threshold: float,
+        target_threshold: float,
+        max_bonus: float,
+    ) -> float:
+        if value is None:
+            return 0.0
+        if value <= minimum_threshold:
+            return 0.0
+        if value >= target_threshold:
+            return max_bonus
+        span = target_threshold - minimum_threshold
+        if span <= 0:
+            return 0.0
+        return max_bonus * ((value - minimum_threshold) / span)
 
     def _ranking_rationale(self, query: FoodQuery) -> List[str]:
         return self._post_processor.ranking_rationale(
@@ -392,7 +541,7 @@ class FoodIntelligencePipeline:
                 f"{nutrient_label.title()} {value:g} satisfies {constraint.operator} {constraint.value:g} {constraint.unit}/100g"
             )
 
-        if "healthy" in query.ranking_preferences and product.nutriscore:
+        if "healthy" in query.ranking_preferences and product.nutriscore in {"a", "b", "c", "d", "e"}:
             reasons.append(f"Nutri-Score {product.nutriscore.upper()} supports healthy preference")
 
         if "kids" in query.ranking_preferences:

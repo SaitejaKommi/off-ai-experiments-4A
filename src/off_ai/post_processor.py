@@ -11,14 +11,27 @@ class RankingPostProcessor:
     """Handles relaxation loop bookkeeping and rationale enrichment."""
 
     def relax_nutrients(self, constraints: ExtractedConstraints) -> Tuple[ExtractedConstraints, List[str]]:
+        """Relax nutrient bounds in small deterministic steps.
+
+        - Calories upper bound: +50 per pass (e.g. 300 -> 350 -> 400).
+        - Other upper bounds: +15% per pass.
+        - Protein/Fiber lower bounds: -2 per pass.
+        - Other lower bounds: -10% per pass.
+        """
         updated = constraints.clone()
         changes: List[str] = []
         for index, constraint in enumerate(updated.nutrient_constraints):
             old_value = constraint.value
             if constraint.operator in (">", ">="):
-                updated.nutrient_constraints[index].value = round(old_value * 0.7, 3)
+                if constraint.nutrient in {"proteins_100g", "fiber_100g"}:
+                    updated.nutrient_constraints[index].value = round(max(0.0, old_value - 2.0), 3)
+                else:
+                    updated.nutrient_constraints[index].value = round(max(0.0, old_value * 0.9), 3)
             elif constraint.operator in ("<", "<="):
-                updated.nutrient_constraints[index].value = round(old_value * 1.3, 3)
+                if constraint.nutrient == "energy_kcal_100g":
+                    updated.nutrient_constraints[index].value = round(old_value + 50.0, 3)
+                else:
+                    updated.nutrient_constraints[index].value = round(old_value * 1.15, 3)
             if updated.nutrient_constraints[index].value != old_value:
                 nutrient = constraint.nutrient.replace("_100g", "")
                 changes.append(

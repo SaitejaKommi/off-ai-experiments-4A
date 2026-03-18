@@ -18,6 +18,7 @@ from .constraint_extractor import ConstraintExtractor, ExtractedConstraints
 from .taxonomy_mapper import TaxonomyMapper
 from .query_builder import QueryBuilder
 from .post_processor import RankingPostProcessor
+from .semantic_reranker import SemanticReranker
 from .pipeline import FoodIntelligencePipeline
 
 __all__ = [
@@ -35,5 +36,6 @@ __all__ = [
     "TaxonomyMapper",
     "QueryBuilder",
     "RankingPostProcessor",
+    "SemanticReranker",
     "FoodIntelligencePipeline",
 ]
