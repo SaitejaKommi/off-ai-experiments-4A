@@ -114,6 +114,35 @@ If dataset is missing, API health will report `dataset_available: false`.
 python run_api.py
 ```
 
+Optional (prototype): enable model-based FR -> EN translation for tougher French phrasing.
+
+Create a `.env` file at the project root (same folder as `run_api.py`).
+
+You can copy `.env.example` and fill your key:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+# In .env
+GROQ_API_KEY=your_groq_api_key
+OFF_TRANSLATION_PROVIDER=groq
+OFF_TRANSLATION_MODEL=llama-3.1-8b-instant
+```
+
+Notes:
+- If `GROQ_API_KEY` is not set, the app uses built-in deterministic EN/FR normalization.
+- If Groq call fails (timeout/network/quota), the app automatically falls back to deterministic normalization.
+- Optional timeout override (seconds):
+
+```powershell
+# In .env
+OFF_TRANSLATION_TIMEOUT_S=8
+```
+
 Server URLs:
 - API root: `http://localhost:8000/`
 - Swagger docs: `http://localhost:8000/docs`

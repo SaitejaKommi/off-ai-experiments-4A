@@ -6,6 +6,11 @@ import logging
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional dependency fallback
+    load_dotenv = None
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -17,6 +22,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+if load_dotenv is not None:
+    load_dotenv()
 
 
 app = FastAPI(

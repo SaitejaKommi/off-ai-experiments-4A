@@ -29,6 +29,9 @@ CATEGORY_MAP = {
     "crackers": "en:crackers",
     "cookies": "en:cookies",
     "cookie": "en:cookies",
+    "prepared-meals": "en:prepared-meals",
+    "ready meals": "en:prepared-meals",
+    "ready meal": "en:prepared-meals",
     "soups": "en:soups",
     "soup": "en:soups",
 }

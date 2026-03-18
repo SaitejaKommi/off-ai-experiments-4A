@@ -24,6 +24,10 @@ htmlcov/
 .idea/
 *.swp
 
+# Local environment secrets
+.env
+.env.local
+
 # Local datasets and scratch inspection scripts
 off_dev.parquet
 src/off_ai/food.parquet

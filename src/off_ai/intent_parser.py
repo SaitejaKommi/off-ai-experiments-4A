@@ -155,15 +155,30 @@ DIETARY_TAG_ALIASES: Dict[str, str] = {
     "vegan": "vegan",
     "plant based": "vegan",
     "plant-based": "vegan",
+    "vegetalien": "vegan",
+    "vegetalienne": "vegan",
+    "vegetaliens": "vegan",
+    "vegetaliennes": "vegan",
+    "vegane": "vegan",
+    "veganes": "vegan",
     "vegetarian": "vegetarian",
+    "vegetarien": "vegetarian",
+    "vegetarienne": "vegetarian",
+    "vegetariens": "vegetarian",
+    "vegetariennes": "vegetarian",
     "gluten free": "gluten-free",
     "gluten-free": "gluten-free",
+    "sans gluten": "gluten-free",
     "organic": "organic",
     "bio": "organic",
+    "biologique": "organic",
     "dairy free": "dairy-free",
     "dairy-free": "dairy-free",
+    "sans produits laitiers": "dairy-free",
+    "sans lait": "dairy-free",
     "lactose free": "lactose-free",
     "lactose-free": "lactose-free",
+    "sans lactose": "lactose-free",
     "halal": "halal",
     "kosher": "kosher",
 }
@@ -187,6 +202,8 @@ CATEGORY_KEYWORDS: Dict[str, str] = {
     "juice": "juices",
     "yogurt": "dairy",
     "yoghurt": "dairy",
+    "yaourt": "dairy",
+    "yogourt": "dairy",
     "dairy": "dairy",
     "milk": "dairy",
     "cheese": "dairy",
@@ -202,6 +219,11 @@ CATEGORY_KEYWORDS: Dict[str, str] = {
     "cookies": "cookies",
     "biscuit": "cookies",
     "biscuits": "cookies",
+    # French category names (accent-stripped forms after preprocessing)
+    "boisson": "beverages",
+    "boissons": "beverages",
+    "pate": "pastas",
+    "pates": "pastas",
     "chip": "chips",
     "chips": "chips",
     "crisps": "chips",
@@ -214,6 +236,12 @@ CATEGORY_KEYWORDS: Dict[str, str] = {
     "sauce": "sauces",
     "dressing": "sauces",
     "spread": "spreads",
+    "ready meal": "prepared-meals",
+    "ready meals": "prepared-meals",
+    "prepared meal": "prepared-meals",
+    "prepared meals": "prepared-meals",
+    "plat prepare": "prepared-meals",
+    "plats prepares": "prepared-meals",
     "jam": "spreads",
     "peanut butter": "spreads",
     "butter": "spreads",
@@ -402,6 +430,32 @@ STRUCTURAL_STOPWORDS = {
     "from",
     "out",
     "up",
+    "meilleur",
+    "meilleure",
+    "meilleurs",
+    "meilleures",
+    # Common French conversational/grammatical words after preprocessing
+    "montrez",
+    "montre",
+    "moi",
+    "des",
+    "du",
+    "de",
+    "la",
+    "le",
+    "les",
+    "un",
+    "une",
+    "et",
+    "ou",
+    "avec",
+    "adapte",
+    "adaptee",
+    "adaptees",
+    "adaptes",
+    "regime",
+    "pauvre",
+    "alimentaire",
 }
 
 _NUTRIENT_PATTERN = "|".join(
@@ -422,14 +476,14 @@ class IntentParser:
             re.compile(
                 r"(under|less than|below|at most|max(?:imum)?|<=?)\s*"
                 r"(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
-                r"(of\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
+                r"((?:of|de)\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
                 re.IGNORECASE,
             ),
             "upper",
         ),
         (
             re.compile(
-                r"({nutrients})\s*(?:of\s+)?(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
+                r"({nutrients})\s*(?:(?:of|de)\s+)?(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
                 r"(or less|or under|max(?:imum)?|and under|<=?)".format(
                     nutrients=_NUTRIENT_PATTERN
                 ),
@@ -441,14 +495,14 @@ class IntentParser:
             re.compile(
                 r"(over|more than|above|at least|min(?:imum)?|>=?)\s*"
                 r"(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
-                r"(of\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
+                r"((?:of|de)\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
                 re.IGNORECASE,
             ),
             "lower",
         ),
         (
             re.compile(
-                r"({nutrients})\s*(?:of\s+)?(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
+                r"({nutrients})\s*(?:(?:of|de)\s+)?(\d+(?:\.\d+)?)\s*(?:g|mg|kcal|cal)?\s*"
                 r"(or more|or over|min(?:imum)?|and over|>=?)".format(
                     nutrients=_NUTRIENT_PATTERN
                 ),
@@ -461,7 +515,7 @@ class IntentParser:
     # "X calories" / "X g protein" shorthand
     _BARE_NUMERIC = re.compile(
         r"(\d+(?:\.\d+)?)\s*(kcal|cal(?:ories)?|g|mg)\s+"
-        r"(?:of\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
+        r"(?:(?:of|de)\s+)?({nutrients})".format(nutrients=_NUTRIENT_PATTERN),
         re.IGNORECASE,
     )
 
@@ -545,7 +599,11 @@ class IntentParser:
         for alias, canonical in DIETARY_TAG_ALIASES.items():
             if re.search(rf"\b{re.escape(alias)}\b", text):
                 tags.append(canonical)
-        return list(dict.fromkeys(tags))
+        deduped = list(dict.fromkeys(tags))
+        # Vegan logically implies vegetarian. Keep the stricter tag only.
+        if "vegan" in deduped and "vegetarian" in deduped:
+            deduped = [tag for tag in deduped if tag != "vegetarian"]
+        return deduped
 
     def _extract_excluded_ingredients(self, text: str) -> List[str]:
         exclusions: List[str] = []
@@ -714,7 +772,10 @@ class IntentParser:
 
         tokens = re.findall(r"[a-z]+", cleaned)
         terms: List[str] = []
+        noise_tokens = {"g", "mg", "kcal", "cal"}
         for token in tokens:
+            if len(token) <= 1 or token in noise_tokens:
+                continue
             if token in STRUCTURAL_STOPWORDS or token.isdigit():
                 continue
             terms.append(token)

@@ -69,6 +69,26 @@ _LABEL_PATTERNS: Dict[str, List[str]] = {
     "kosher": ["%kosher%"],
 }
 
+_LABEL_SYNONYMS: Dict[str, List[str]] = {
+    "vegan": [
+        "vegan",
+        "plant based",
+        "plant-based",
+        "vegetalien",
+        "vegetalienne",
+        "vegetaliens",
+        "vegetaliennes",
+        "vegane",
+    ],
+    "vegetarian": ["vegetarian", "vegetarien", "vegetarienne", "vegetariens"],
+    "gluten-free": ["gluten-free", "gluten free", "sans gluten"],
+    "organic": ["organic", "bio", "biologique"],
+    "dairy-free": ["dairy-free", "dairy free", "sans produits laitiers", "sans lait"],
+    "lactose-free": ["lactose-free", "lactose free", "sans lactose"],
+    "halal": ["halal"],
+    "kosher": ["kosher"],
+}
+
 
 def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
@@ -88,6 +108,11 @@ def _canonical_nutrient_key(key: str) -> str:
     if key == "fibre_100g":
         return "fiber_100g"
     return key.replace("-", "_")
+
+
+def _strip_accents(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
 
 def _expand_nutrient_aliases(key: str) -> List[str]:
@@ -154,9 +179,10 @@ class Product:
         return None
 
     def has_label(self, label: str) -> bool:
-        label_lower = label.lower()
-        haystack = " ".join(self.labels).lower()
-        return label_lower in haystack
+        label_lower = _strip_accents(label.lower().strip())
+        haystack = _strip_accents(" ".join(self.labels).lower())
+        candidates = _LABEL_SYNONYMS.get(label_lower, [label_lower])
+        return any(candidate in haystack for candidate in candidates)
 
     def passes_constraints(
         self,
@@ -319,6 +345,13 @@ def _normalize_text_value(value: Any, default: str = "") -> str:
     return default
 
 
+def _normalize_grade_value(value: Any) -> Optional[str]:
+    normalized = _normalize_text_value(value, default="").strip().lower()
+    if normalized in {"", "unknown", "none", "null", "nan", "not applicable", "not-applicable"}:
+        return None
+    return normalized
+
+
 def _slugify_product_name(name: str) -> str:
     if not name:
         return ""
@@ -454,9 +487,9 @@ def _parse_product(raw: Dict[str, Any]) -> Product:
         brands=_normalize_text_value(raw.get("brands"), default=""),
         categories=categories,
         nutrients=nutrients,
-        nutriscore=(raw.get("nutriscore_grade") or raw.get("nutriscore") or "").lower() or None,
+        nutriscore=_normalize_grade_value(raw.get("nutriscore_grade") or raw.get("nutriscore")),
         nova_group=nova,
-        ecoscore=(raw.get("ecoscore_grade") or raw.get("ecoscore") or "").lower() or None,
+        ecoscore=_normalize_grade_value(raw.get("ecoscore_grade") or raw.get("ecoscore")),
         additives=additives,
         additives_count=int(raw.get("additives_n") or len(additives)),
         labels=labels,
@@ -768,7 +801,7 @@ class OFFDataAdapter:
         )
 
     def _label_text_expr(self) -> str:
-        return " || ' ' || ".join([self._string_expr("labels"), self._string_expr("categories")])
+        return self._string_expr("labels")
 
     def _ingredient_text_expr(self) -> str:
         return " || ' ' || ".join([self._string_expr("ingredients_text"), self._string_expr("ingredients_tags")])

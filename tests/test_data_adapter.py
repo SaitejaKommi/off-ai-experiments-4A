@@ -89,6 +89,20 @@ def test_parse_product_normalizes_nutrients():
     assert "spreads" in product.categories
 
 
+def test_parse_product_normalizes_unknown_grades_to_none():
+    raw = {
+        "code": "42",
+        "product_name": "Mystery Snack",
+        "nutriscore_grade": "unknown",
+        "ecoscore_grade": "not-applicable",
+    }
+
+    product = _parse_product(raw)
+
+    assert product.nutriscore is None
+    assert product.ecoscore is None
+
+
 def test_parse_product_picks_text_from_localized_name_structs():
     raw = {
         "code": "999",
@@ -195,6 +209,38 @@ def test_search_returns_matching_products_from_parquet(parquet_path: Path):
     assert results[0].name == "Sea Salt Lentil Chips"
 
 
+def test_vegan_filter_does_not_treat_plant_based_categories_as_labels(tmp_path: Path):
+    parquet_file = tmp_path / "vegan_labels_only.parquet"
+    connection = duckdb.connect()
+    connection.execute(
+        """
+        COPY (
+            SELECT
+                code,
+                product_name,
+                categories,
+                labels,
+                nutriscore_grade,
+                sodium_100g
+            FROM (
+                VALUES
+                    ('1', 'Category Only Tortillas', 'Plant-based foods, Snacks', 'Sans conservateurs', 'a', 0.07),
+                    ('2', 'Explicit Vegan Crackers', 'Snacks, Crackers', 'Vegan', 'b', 0.02)
+            ) AS source(code, product_name, categories, labels, nutriscore_grade, sodium_100g)
+        ) TO ? (FORMAT parquet)
+        """,
+        [str(parquet_file)],
+    )
+    connection.close()
+
+    adapter = OFFDataAdapter(parquet_path=str(parquet_file))
+    query = FoodQuery(raw_text="vegan snacks", category="snacks", dietary_tags=["vegan"], max_results=5)
+
+    results = adapter.search(query)
+
+    assert [product.name for product in results] == ["Explicit Vegan Crackers"]
+
+
 def test_execute_search_reports_timing(parquet_path: Path):
     adapter = OFFDataAdapter(parquet_path=str(parquet_path))
     execution = adapter.execute_search(FoodQuery(raw_text="vegan snacks", max_results=5))
@@ -207,3 +253,30 @@ def test_find_reference_product_searches_text_fields(parquet_path: Path):
     result = adapter.find_reference_product("sweet kids cereal")
     assert result is not None
     assert result.name == "Sweet Kids Cereal"
+
+
+def test_product_has_label_supports_french_vegan_synonyms():
+    product = Product(barcode="1", name="Test", labels=["Végétalien", "Biologique"])
+    assert product.has_label("vegan")
+    assert product.has_label("organic")
+
+
+def test_build_search_sql_vegan_includes_french_label_patterns(parquet_path: Path):
+    adapter = OFFDataAdapter(parquet_path=str(parquet_path))
+    query = FoodQuery(raw_text="vegan snacks", dietary_tags=["vegan"], max_results=5)
+    sql, parameters = adapter.build_search_sql(query, limit=5)
+    assert "ILIKE ?" in sql
+    assert any("vegetalien" in str(param) for param in parameters)
+
+
+def test_build_search_sql_calorie_upper_bound_excludes_zero_values(parquet_path: Path):
+    adapter = OFFDataAdapter(parquet_path=str(parquet_path))
+    query = FoodQuery(
+        raw_text="snacks under 390 calories",
+        category="snacks",
+        nutrient_constraints=[NutrientConstraint("energy_kcal_100g", "<=", 390.0, "kcal")],
+        max_results=5,
+    )
+    sql, _ = adapter.build_search_sql(query, limit=5)
+    assert "energy_kcal_100g" in sql
+    assert "> 0" in sql

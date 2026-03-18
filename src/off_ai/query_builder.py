@@ -8,12 +8,32 @@ from typing import Any, List, Optional, Tuple
 from .constraint_extractor import ExtractedConstraints
 
 _LABEL_PATTERNS = {
-    "vegan": ["%vegan%", "%plant-based%"],
-    "vegetarian": ["%vegetarian%"],
-    "gluten-free": ["%gluten-free%", "%gluten free%"],
-    "organic": ["%organic%", "%bio%"],
-    "dairy-free": ["%dairy-free%", "%dairy free%", "%lactose-free%"],
-    "lactose-free": ["%lactose-free%", "%lactose free%"],
+    "vegan": [
+        "%vegan%",
+        "%plant-based%",
+        "%plant based%",
+        "%vegetalien%",
+        "%vegetalienne%",
+        "%vegetaliens%",
+        "%vegetaliennes%",
+        "%végétalien%",
+        "%végétalienne%",
+        "%végétaliens%",
+        "%végétaliennes%",
+        "%vegane%",
+    ],
+    "vegetarian": ["%vegetarian%", "%vegetarien%", "%vegetarienne%", "%vegetariens%"],
+    "gluten-free": ["%gluten-free%", "%gluten free%", "%sans gluten%"],
+    "organic": ["%organic%", "%bio%", "%biologique%"],
+    "dairy-free": [
+        "%dairy-free%",
+        "%dairy free%",
+        "%lactose-free%",
+        "%lactose free%",
+        "%sans produits laitiers%",
+        "%sans lait%",
+    ],
+    "lactose-free": ["%lactose-free%", "%lactose free%", "%sans lactose%"],
     "halal": ["%halal%"],
     "kosher": ["%kosher%"],
 }
@@ -74,6 +94,9 @@ class QueryBuilder:
             if nutrient_expr is None:
                 continue
             clause = f"{nutrient_expr} {constraint.operator} ?"
+            if constraint.nutrient == "energy_kcal_100g" and constraint.operator in {"<", "<="}:
+                # Guard against malformed rows where calories are recorded as 0.
+                clause = f"({clause} AND {nutrient_expr} > 0)"
             if allow_missing_nutrients:
                 clause = f"({clause} OR {nutrient_expr} IS NULL)"
             where_clauses.append(clause)
@@ -121,8 +144,14 @@ class QueryBuilder:
         sodium = adapter._field_expr("sodium_100g") or "NULL"
         calories = adapter._field_expr("energy_kcal_100g") or "NULL"
         return (
-            f"(COALESCE({proteins}, 0) * 2 "
-            f"- COALESCE({sugars}, 0) "
-            f"- COALESCE({sodium}, 0) * 1.5 "
-            f"- COALESCE({calories}, 0) * 0.1)"
+            "("
+            f"LEAST(COALESCE({proteins}, 0), 25) * 0.6 "
+            f"- LEAST(COALESCE({sugars}, 0), 30) * 0.35 "
+            f"- LEAST(COALESCE({sodium}, 0), 1.5) * 10 "
+            f"+ CASE "
+            f"WHEN {calories} IS NULL THEN 0 "
+            f"WHEN {calories} <= 250 THEN 2 "
+            f"WHEN {calories} <= 400 THEN 1 "
+            f"ELSE 0 END"
+            ")"
         )
