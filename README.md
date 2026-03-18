@@ -201,7 +201,5 @@ python -m pytest tests -q
 - Keep explanations aligned with executed constraints
 - Add regression tests when fixing search-quality issues
 
-## License
 
-MIT
 
