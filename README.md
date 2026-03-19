@@ -23,9 +23,9 @@ This project now includes:
 
 ## Project Structure
 
-- `src/off_ai/` core backend modules
-- `run_api.py` start FastAPI server
-- `extension/` Chrome extension popup
+- `server/src/off_ai/` core backend modules
+- `server/run_api.py` start FastAPI server
+- `client/extension/` Chrome extension popup
 - `tests/` unit and behavior tests
 
 ## Requirements
@@ -70,7 +70,7 @@ source .venv/bin/activate
 ### 3. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -r server/requirements.txt
 ```
 
 ### 4. Add dataset
@@ -78,7 +78,7 @@ pip install -r requirements.txt
 Create the curated development dataset:
 
 ```powershell
-python download_dataset.py
+python server/download_dataset.py
 ```
 
 This generates `off_dev.parquet` with:
@@ -89,7 +89,7 @@ This generates `off_dev.parquet` with:
 If you already have the full OFF parquet locally and want DuckDB to curate it directly:
 
 ```powershell
-python download_dataset.py --method duckdb --source-parquet off_products.parquet
+python server/download_dataset.py --method duckdb --source-parquet off_products.parquet
 ```
 
 The API prefers `off_dev.parquet` automatically. To override the dataset path:
@@ -101,7 +101,7 @@ $env:OFF_PARQUET_PATH = "path\to\your.parquet"
 Fallback when offline:
 
 ```powershell
-python create_dev_dataset.py
+python server/create_dev_dataset.py
 ```
 
 That creates a small synthetic `off_dev.parquet` for local testing only.
@@ -111,17 +111,17 @@ If dataset is missing, API health will report `dataset_available: false`.
 ### 5. Start API server
 
 ```bash
-python run_api.py
+python server/run_api.py
 ```
 
 Optional (prototype): enable model-based FR -> EN translation for tougher French phrasing.
 
-Create a `.env` file at the project root (same folder as `run_api.py`).
+Create a `.env` file at the project root.
 
-You can copy `.env.example` and fill your key:
+You can copy `server/.env.example` and fill your key:
 
 ```powershell
-Copy-Item .env.example .env
+Copy-Item server/.env.example .env
 ```
 
 Windows PowerShell:
@@ -151,8 +151,8 @@ Server URLs:
 ### 6. Try CLI search (optional)
 
 ```bash
-python -m off_ai "gluten free cookies"
-python -m off_ai "give a snack which has no palm oil"
+python -m server.src.off_ai "gluten free cookies"
+python -m server.src.off_ai "give a snack which has no palm oil"
 ```
 
 ### 7. Load Chrome extension
@@ -160,7 +160,7 @@ python -m off_ai "give a snack which has no palm oil"
 1. Open `chrome://extensions`
 2. Enable **Developer mode**
 3. Click **Load unpacked**
-4. Select the `extension/` folder
+4. Select the `client/extension/` folder
 5. Open extension popup and search
 
 The extension calls API at `http://localhost:8000`.

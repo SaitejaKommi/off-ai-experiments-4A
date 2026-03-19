@@ -123,7 +123,7 @@ flowchart TD
 ## 6. Component Breakdown
 
 ### API layer
-- `src/off_ai/api.py`
+- `server/src/off_ai/api.py`
 - Exposes:
   - `GET /` service and dataset status
   - `GET /health` dataset availability and row count
@@ -132,58 +132,58 @@ flowchart TD
   - `query`, `interpreted_query`, `applied_filters`, `generated_sql`, `ranking_rationale`, `relaxation`, `performance`, `products`
 
 ### Orchestration layer
-- `src/off_ai/pipeline.py`
+- `server/src/off_ai/pipeline.py`
 - Main workflow owner:
   - preprocess -> parse -> extract -> taxonomy map -> execute SQL -> relax (if needed) -> semantic rerank -> health/ranking explanation
 - Tracks timing metrics (`preprocess_ms`, `parse_ms`, `duckdb_execution_ms`, `ranking_ms`, `total_ms`)
 - Keeps executed constraints and returned rationale aligned
 
 ### NLP and intent understanding
-- `src/off_ai/query_preprocessor.py`
+- `server/src/off_ai/query_preprocessor.py`
   - lightweight FR detection
   - FR token normalization to canonical EN search vocabulary
   - optional Groq translation path via environment config
-- `src/off_ai/intent_parser.py`
+- `server/src/off_ai/intent_parser.py`
   - rule-driven parser
   - extracts category, dietary tags, numeric constraints, exclusions, ranking preferences, search terms
   - supports qualitative phrases (e.g., low sugar, high protein)
-- `src/off_ai/constraint_extractor.py`
+- `server/src/off_ai/constraint_extractor.py`
   - converts `FoodQuery` into normalized constraint object used by query builder
 
 ### Taxonomy alignment
-- `src/off_ai/taxonomy_mapper.py`
+- `server/src/off_ai/taxonomy_mapper.py`
 - Maps user categories to OFF taxonomy tags (e.g., `snacks` -> `en:salty-snacks`, `cookies` -> `en:cookies`)
 
 ### Data access and SQL generation
-- `src/off_ai/data_adapter.py`
+- `server/src/off_ai/data_adapter.py`
   - resolves dataset path from explicit path/env/default candidates
   - creates DuckDB `products` view from Parquet
   - schema-aware field resolution and normalization
   - executes SQL and converts rows to normalized `Product`
-- `src/off_ai/query_builder.py`
+- `server/src/off_ai/query_builder.py`
   - builds parameterized SQL WHERE clauses for category/tags/nutrients/exclusions/keywords
   - applies ordering strategy based on nutriscore, nova, nutrient heuristics, and popularity
 
 ### Ranking, reasoning, and recommendations
-- `src/off_ai/semantic_reranker.py`
+- `server/src/off_ai/semantic_reranker.py`
   - computes semantic similarity scores for candidates
   - embedding model if available; lexical overlap fallback otherwise
-- `src/off_ai/insight_engine.py`
+- `server/src/off_ai/insight_engine.py`
   - computes health classification and risk/positive indicators
-- `src/off_ai/post_processor.py`
+- `server/src/off_ai/post_processor.py`
   - deterministic numeric relaxation policy
   - ranking rationale builder
-- `src/off_ai/recommendation_engine.py`
+- `server/src/off_ai/recommendation_engine.py`
   - alternative recommendation logic for comparison-mode workflows
 
 ### User interaction surfaces
-- CLI: `src/off_ai/cli.py`, `src/off_ai/__main__.py`
-- API launcher: `run_api.py`
+- CLI: `server/src/off_ai/cli.py`, `server/src/off_ai/__main__.py`
+- API launcher: `server/run_api.py`
 - Chrome extension:
-  - `extension/manifest.json`
-  - `extension/popup/popup.html`
-  - `extension/popup/popup.js`
-  - `extension/popup/popup.css`
+  - `client/extension/manifest.json`
+  - `client/extension/popup/popup.html`
+  - `client/extension/popup/popup.js`
+  - `client/extension/popup/popup.css`
 
 ## 7. Dataset and Storage Strategy
 
@@ -193,12 +193,12 @@ flowchart TD
 - Optional override via `OFF_PARQUET_PATH`
 
 ### Curated development dataset
-- `download_dataset.py`
+- `server/download_dataset.py`
 - Produces Canada-focused subset (default 50,000 rows)
 - Keeps search-relevant schema fields for speed and lower footprint
 
 ### Offline synthetic fallback
-- `create_dev_dataset.py`
+- `server/create_dev_dataset.py`
 - Generates realistic synthetic local dataset when internet is unavailable
 
 ### Runtime relation model
@@ -303,16 +303,16 @@ flowchart TD
 2. Install dependencies: `pip install -r requirements.txt`
 
 ### Prepare data
-- Preferred: `python download_dataset.py`
-- Offline fallback: `python create_dev_dataset.py`
+- Preferred: `python server/download_dataset.py`
+- Offline fallback: `python server/create_dev_dataset.py`
 
 ### Start backend
-- `python run_api.py`
+- `python server/run_api.py`
 - Swagger docs: `http://localhost:8000/docs`
 
 ### Use interfaces
-- CLI example: `python -m off_ai "high protein snack"`
-- Extension: load `extension/` as unpacked extension in Chrome
+- CLI example: `python -m server.src.off_ai "high protein snack"`
+- Extension: load `client/extension/` as unpacked extension in Chrome
 
 ## 13. What This Prototype Demonstrates
 
